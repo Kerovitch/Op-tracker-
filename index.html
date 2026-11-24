@@ -49,7 +49,7 @@ nav button.on{color:var(--ac);font-weight:700}
 const h=(t,a={},...c)=>{const e=document.createElement(t);for(const k in a){if(k==='class')e.className=a[k];else if(k.startsWith('on'))e.addEventListener(k.slice(2),a[k]);else e.setAttribute(k,a[k])}c.flat().forEach(x=>e.append(x instanceof Node?x:document.createTextNode(x==null?'':String(x))));return e};
 const eur=n=>new Intl.NumberFormat('fr-FR',{style:'currency',currency:'EUR'}).format(n||0);
 const today=()=>new Date().toISOString().slice(0,10);
-let sig=null,sigF='opp',cat={t:'',r:'',min:5},items=[],tab='sum',ref=null,loaded=false,form={type:'achat',date:today(),platform:'Cardmarket'},toast='';
+let sig=null,sigF='opp',cat={q:'',t:'',g:'',r:'',v:'',min:5,sort:'price_desc',n:100},items=[],tab='sum',ref=null,loaded=false,form={type:'achat',date:today(),platform:'Cardmarket'},toast='';
 const PLATS=['Cardmarket','eBay','Vinted','Leboncoin','TCGplayer','Magasin / boutique','Autre'];
 
 function setStatus(t){document.getElementById('status').textContent=t}
@@ -57,8 +57,8 @@ function compute(){
   const s=[...items].sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.ts-b.ts);
   const inv={};let profit=0,rev=0,spent=0,sold=0,cogs=0;
   for(const t of s){
-    const k=(t.code||t.name).trim().toUpperCase()+(t.ver?'|'+t.ver.trim().toUpperCase():'');
-    const i=inv[k]||(inv[k]={name:t.name,code:t.code,ver:t.ver||'',qty:0,cost:0,profit:0,sold:0});
+    const k=(t.code||t.name).trim().toUpperCase()+(t.ver?'|'+t.ver.trim().toUpperCase():'')+'|'+(t.lang||'EN');
+    const i=inv[k]||(inv[k]={name:t.name,code:t.code,ver:t.ver||'',lang:t.lang||'EN',qty:0,cost:0,profit:0,sold:0});
     if(t.type==='achat'){const c=t.qty*t.price+t.fees;i.qty+=t.qty;i.cost+=c;spent+=c}
     else{
       const avg=i.qty>0?i.cost/i.qty:0,net=t.qty*t.price-t.fees,cg=t.qty*avg,p=net-cg;
@@ -99,14 +99,14 @@ function viewAdd(){
   const dl=h('datalist',{id:'names'},names.map(n=>h('option',{value:n})));
   const name=h('input',{id:'name',list:'names',placeholder:'Ex : Monkey D. Luffy (Alt Art)',autocomplete:'off'});
   const code=h('input',{id:'code',placeholder:'Ex : OP05-119'});
-  name.addEventListener('change',()=>{const m=items.find(t=>t.name===name.value);if(m){code.value=m.code||'';document.getElementById('set').value=m.set||'';document.getElementById('ver').value=m.ver||''}});
+  name.addEventListener('change',()=>{const m=items.find(t=>t.name===name.value);if(m){code.value=m.code||'';document.getElementById('set').value=m.set||'';document.getElementById('ver').value=m.ver||'';document.getElementById('lang').value=m.lang||'EN'}});
   const plat=h('select',{id:'plat'},PLATS.map(p=>h('option',{value:p,...(p===form.platform?{selected:''}:{})},p)));
   box.append(seg,dl,
     h('label',{},'Carte'),name,
     h('div',{class:'two'},h('div',{},h('label',{},'Code'),code),h('div',{},h('label',{},'Set'),h('input',{id:'set',placeholder:'Ex : OP05'}))),
     h('div',{class:'two'},h('div',{},h('label',{},'Quantité'),h('input',{id:'qty',type:'number',min:'1',value:'1',inputmode:'numeric'})),h('div',{},h('label',{},'Prix unitaire (€)'),h('input',{id:'price',type:'number',min:'0',step:'0.01',inputmode:'decimal'}))),
     h('div',{class:'two'},h('div',{},h('label',{},'Frais / port (€)'),h('input',{id:'fees',type:'number',min:'0',step:'0.01',value:'0',inputmode:'decimal'})),h('div',{},h('label',{},'Date'),h('input',{id:'date',type:'date',value:form.date}))),
-    h('label',{},'Version Cardmarket (optionnel)'),h('input',{id:'ver',placeholder:'V.1, V.2…'}),h('label',{},'Plateforme'),plat,
+    h('label',{},'Version Cardmarket (optionnel)'),h('input',{id:'ver',placeholder:'V.1, V.2…'}),h('label',{},'Langue de la carte'),h('select',{id:'lang'},['EN','JP','FR','Autre'].map(l=>h('option',{value:l},l))),h('label',{},'Plateforme'),plat,
     h('label',{},'Note (optionnel)'),h('input',{id:'note'}),
     h('button',{class:'btn',onclick:add},'Enregistrer'),
     h('div',{class:'toast',id:'toast'},toast));
@@ -117,7 +117,7 @@ function add(){
   const name=g('name'),qty=parseInt(g('qty'),10),price=parseFloat(g('price')),fees=parseFloat(g('fees')||'0')||0;
   const t=document.getElementById('toast');
   if(!name||!(qty>0)||!(price>=0)||g('price')===''){t.style.color='var(--bad)';t.textContent='Nom, quantité et prix sont requis.';return}
-  items.push({id:Date.now().toString(36),ts:Date.now(),type:form.type,name,code:g('code'),set:g('set'),qty,price,fees,date:g('date')||today(),platform:g('plat'),note:g('note'),ver:g('ver')});
+  items.push({id:Date.now().toString(36),ts:Date.now(),type:form.type,name,code:g('code'),set:g('set'),qty,price,fees,date:g('date')||today(),platform:g('plat'),note:g('note'),ver:g('ver'),lang:g('lang')});
   form.date=g('date')||today();form.platform=g('plat');
   toast='✓ '+(form.type==='achat'?'Achat':'Vente')+' enregistré(e)';
   save();render();
@@ -126,7 +126,7 @@ function viewHist(){
   if(!items.length)return h('div',{class:'empty'},'Aucune transaction. Ajoute ton premier achat !');
   const s=[...items].sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:b.ts-a.ts);
   return h('div',{class:'card'},s.map(t=>h('div',{class:'row'},
-    h('div',{},h('b',{},t.name),h('div',{class:'sm'},[t.date,t.code,t.platform,t.qty+' × '+eur(t.price),t.fees?'frais '+eur(t.fees):''].filter(Boolean).join(' · ')),t.note?h('div',{class:'sm'},t.note):''),
+    h('div',{},h('b',{},t.name),h('div',{class:'sm'},[t.date,t.code,t.lang||'EN',t.platform,t.qty+' × '+eur(t.price),t.fees?'frais '+eur(t.fees):''].filter(Boolean).join(' · ')),t.note?h('div',{class:'sm'},t.note):''),
     h('div',{style:'text-align:right'},h('b',{class:t.type==='vente'?'pos':''},(t.type==='vente'?'+':'−')+eur(t.qty*t.price)),h('div',{},h('button',{class:'del',title:'Supprimer',onclick:()=>{if(confirm('Supprimer cette transaction ?')){items=items.filter(x=>x.id!==t.id);save();render()}}},'🗑')))
   )));
 }
@@ -134,7 +134,7 @@ function viewStock(){
   const c=compute(),list=Object.values(c.inv).filter(x=>x.qty>0).sort((a,b)=>b.cost-a.cost);
   if(!list.length)return h('div',{class:'empty'},'Stock vide.');
   return h('div',{},h('div',{class:'sub'},list.reduce((a,x)=>a+x.qty,0)+' cartes · '+eur(c.stockCost)+' au coût'),
-    h('div',{class:'card'},list.map(x=>h('div',{class:'row'},h('div',{},h('b',{},x.name),h('div',{class:'sm'},x.code||'')),h('div',{style:'text-align:right'},h('b',{},'×'+x.qty),h('div',{class:'sm'},'coût moy. '+eur(x.cost/x.qty)))))));
+    h('div',{class:'card'},list.map(x=>h('div',{class:'row'},h('div',{},h('b',{},x.name),h('div',{class:'sm'},[x.code,x.ver,x.lang].filter(Boolean).join(' · '))),h('div',{style:'text-align:right'},h('b',{},'×'+x.qty),h('div',{class:'sm'},'coût moy. '+eur(x.cost/x.qty)))))));
 }
 function viewSig(){
   if(!sig||!sig.rows)return h('div',{class:'empty'},'Aucun signal pour le moment. Lance l’action GitHub « Prix quotidiens » une première fois.');
@@ -187,23 +187,53 @@ function viewOpp(box){
     return s>0?{m,tags,s}:null}).filter(Boolean).sort((a,b)=>b.s-a.s).slice(0,30);
   box.append(h('h2',{},'À étudier à l’achat'));
   box.append(buys.length?h('div',{class:'card'},buys.map(b=>cmRow(b.m,b.tags,h('b',{},eur(b.m.l!=null&&b.tags[0].startsWith('annonce')?b.m.l:b.m.e))))):h('div',{class:'empty'},'Rien pour le moment.'));
-  box.append(h('div',{class:'sub',style:'margin-top:12px'},'Pistes, pas des conseils : l’annonce la moins chère peut être une autre langue ou un autre état, et un momentum peut déjà être derrière. Vérifie sur Cardmarket. Frais de vente supposés : 5 %.'));
+  box.append(h('div',{class:'sub',style:'margin-top:12px'},'Pistes, pas des conseils : l’annonce la moins chère peut être une autre langue ou un autre état, et un momentum peut déjà être derrière. Vérifie sur Cardmarket. Frais de vente supposés : 5 %. Les prix Cardmarket mélangent toutes les langues.'));
   return box;
 }
+const RANK=['common','uncommon','rare','leader','super rare','secret rare','special','treasure','manga','promo'];
+const rk=r=>{const l=String(r||'').toLowerCase();let b=-1,n=0;RANK.forEach((k,i)=>{if(l.includes(k)&&k.length>n){b=i;n=k.length}});return b};
+const nz=t=>String(t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+const SORT_LABELS={price_desc:'Prix décroissant',price_asc:'Prix croissant',name_asc:'Nom A → Z',name_desc:'Nom Z → A',rar_desc:'Rareté (haute d’abord)',rar_asc:'Rareté (basse d’abord)',date_desc:'Sortie : récent d’abord',date_asc:'Sortie : ancien d’abord',chg_desc:'Hausse sur 7 j'};
 function viewCat(box,own){
-  const rows=sig.rows;
+  const rows=sig.rows,sets=sig.sets||{};
   if(!rows.some(x=>x.t)){box.append(h('div',{class:'empty'},'Relance « Prix quotidiens » sur GitHub : le fichier n’a pas encore les raretés.'));return box}
-  const types=[...new Set(rows.map(x=>x.t).filter(Boolean))].sort(),rars=[...new Set(rows.map(x=>x.r).filter(Boolean))].sort();
-  const sel=(k,opts,all)=>h('select',{onchange:e=>{cat[k]=e.target.value;render()}},h('option',{value:''},all),opts.map(o=>h('option',{value:o,...(cat[k]===o?{selected:''}:{})},o)));
-  box.append(h('div',{class:'two'},h('div',{},h('label',{},'Série'),sel('t',types,'Toutes')),h('div',{},h('label',{},'Rareté'),sel('r',rars,'Toutes'))),
-    h('label',{},'Prix minimum ($)'),h('input',{type:'number',min:'0',step:'1',value:cat.min,inputmode:'decimal',onchange:e=>{cat.min=parseFloat(e.target.value)||0;render()}}));
-  const r=rows.filter(x=>(!cat.t||x.t===cat.t)&&(!cat.r||x.r===cat.r)&&x.p>=cat.min).sort((a,b)=>b.p-a.p);
-  box.append(h('div',{class:'sub',style:'margin-top:10px'},r.length+' cartes'+(r.length>100?' (100 premières)':'')));
-  box.append(r.length?h('div',{class:'card'},r.slice(0,100).map(x=>{
-    const o=own(x.c),nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
-    return h('div',{class:'row'},h('div',{},nm,h('div',{class:'sm'},[x.c,x.s,x.r,x.t].filter(Boolean).join(' · ')),o?h('div',{class:'sm'},'📦 en stock ×'+o.qty):''),
-      h('div',{style:'text-align:right'},h('b',{},'$'+x.p.toFixed(2)),h('div',{class:'sm '+(x.d7>0?'pos':x.d7<0?'neg':'')},x.d7==null?'':(x.d7>0?'+':'')+x.d7+' %')))})):h('div',{class:'empty'},'Aucune carte.'));
-  return box;
+  const sd=x=>(sets[x.g]||{}).d||'';
+  const C={price_desc:(a,b)=>b.p-a.p,price_asc:(a,b)=>a.p-b.p,name_asc:(a,b)=>a.n.localeCompare(b.n,'fr'),name_desc:(a,b)=>b.n.localeCompare(a.n,'fr'),
+    rar_desc:(a,b)=>rk(b.r)-rk(a.r)||b.p-a.p,rar_asc:(a,b)=>rk(a.r)-rk(b.r)||a.p-b.p,
+    date_desc:(a,b)=>sd(b).localeCompare(sd(a))||a.c.localeCompare(b.c),date_asc:(a,b)=>sd(a).localeCompare(sd(b))||a.c.localeCompare(b.c),
+    chg_desc:(a,b)=>(b.d7==null?-1e9:b.d7)-(a.d7==null?-1e9:a.d7)};
+  const uniq=a=>[...new Set(a.filter(Boolean))].sort((x,y)=>x.localeCompare(y,'fr'));
+  const edLabel=g=>{const e=sets[g]||{};return (e.a?e.a+' — ':'')+(e.n||g)};
+  const ctl=h('div'),out=h('div');
+  const sel=(k,opts,all)=>h('select',{onchange:e=>{cat[k]=e.target.value;if(k==='t')cat.g='';cat.n=100;ctls();draw()}},h('option',{value:''},all),opts.map(o=>h('option',{value:o[0],...(String(cat[k])===String(o[0])?{selected:''}:{})},o[1])));
+  function ctls(){
+    const gids=[...new Set(rows.filter(x=>!cat.t||x.t===cat.t).map(x=>x.g).filter(g=>g!=null))].sort((a,b)=>((sets[b]||{}).d||'').localeCompare((sets[a]||{}).d||''));
+    ctl.replaceChildren(
+      h('label',{},'Recherche'),h('input',{type:'search',placeholder:'Nom, code (OP05-119), édition…',value:cat.q,oninput:e=>{cat.q=e.target.value;cat.n=100;draw()}}),
+      h('div',{class:'two'},h('div',{},h('label',{},'Série'),sel('t',uniq(rows.map(x=>x.t)).map(t=>[t,t]),'Toutes')),h('div',{},h('label',{},'Édition'),sel('g',gids.map(g=>[g,edLabel(g)]),'Toutes'))),
+      h('div',{class:'two'},h('div',{},h('label',{},'Rareté'),sel('r',uniq(rows.map(x=>x.r)).sort((a,b)=>rk(a)-rk(b)).map(r=>[r,r]),'Toutes')),h('div',{},h('label',{},'Variante'),sel('v',uniq(rows.map(x=>x.q)).map(v=>[v,v]),'Toutes'))),
+      h('div',{class:'two'},h('div',{},h('label',{},'Prix min. ($)'),h('input',{type:'number',min:'0',step:'1',value:cat.min,inputmode:'decimal',onchange:e=>{cat.min=parseFloat(e.target.value)||0;draw()}})),
+        h('div',{},h('label',{},'Tri'),h('select',{onchange:e=>{cat.sort=e.target.value;draw()}},Object.entries(SORT_LABELS).map(([k,l])=>h('option',{value:k,...(cat.sort===k?{selected:''}:{})},l))))));
+  }
+  function draw(){
+    const toks=nz(cat.q).split(/\s+/).filter(Boolean);
+    let r=rows.filter(x=>(!cat.t||x.t===cat.t)&&(!cat.g||String(x.g)===String(cat.g))&&(!cat.r||x.r===cat.r)&&(!cat.v||x.q===cat.v)&&x.p>=cat.min);
+    if(toks.length)r=r.filter(x=>{const e=sets[x.g]||{},hay=nz([x.n,x.c,e.n,e.a,x.r,x.q].join(' '));return toks.every(t=>hay.includes(t))});
+    r.sort(C[cat.sort]||C.price_desc);
+    const kids=[h('div',{class:'sub',style:'margin-top:10px'},r.length+' cartes · prix US en $ (version anglaise)')];
+    kids.push(r.length?h('div',{class:'card'},r.slice(0,cat.n).map(x=>{
+      const e=sets[x.g]||{},o=own(x.c),nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
+      return h('div',{class:'row'},h('div',{},nm,
+        h('div',{class:'sm'},[x.c,e.a||x.s,x.r,x.q&&x.q!=='Standard'?x.q:''].filter(Boolean).join(' · ')),
+        e.n?h('div',{class:'sm'},e.n+(e.d?' · sortie '+e.d:'')):'',
+        o?h('div',{class:'sm'},'📦 en stock ×'+o.qty):''),
+        h('div',{style:'text-align:right'},h('b',{},'$'+x.p.toFixed(2)),x.e!=null?h('div',{class:'sm'},'≈ '+eur(x.e)+' Cardmarket'):'',
+          h('div',{class:'sm '+(x.d7>0?'pos':x.d7<0?'neg':'')},x.d7==null?'':(x.d7>0?'+':'')+x.d7+' %')))})):h('div',{class:'empty'},'Aucune carte.'));
+    if(r.length>cat.n)kids.push(h('button',{class:'btn',onclick:()=>{cat.n+=100;draw()}},'Afficher plus ('+(r.length-cat.n)+')'));
+    kids.push(h('div',{class:'sub',style:'margin-top:12px'},'Prix TCGplayer = version anglaise. Cardmarket mélange toutes les langues : son prix en € n’apparaît que si la carte est unique des deux côtés.'));
+    out.replaceChildren(...kids);
+  }
+  ctls();draw();box.append(ctl,out);return box;
 }
 function render(){
   const v=document.getElementById('view');v.replaceChildren(tab==='sum'?viewSum():tab==='add'?viewAdd():tab==='hist'?viewHist():tab==='sig'?viewSig():viewStock());
