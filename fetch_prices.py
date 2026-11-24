@@ -23,6 +23,15 @@ def find_snapshot(today, back, tol):
     return None
 
 
+def kind(number, group_name):
+    if "promo" in group_name.lower():
+        return "Promo"
+    for prefix in ("PRB", "EB", "OP", "ST"):
+        if number.upper().startswith(prefix):
+            return prefix
+    return "Autre"
+
+
 def pct(now, old):
     return round((now - old) / old * 100, 1) if old else None
 
@@ -48,6 +57,7 @@ def main():
                 "c": ext["Number"], "n": p["name"],
                 "s": g.get("abbreviation") or g["name"],
                 "p": round(price, 2), "u": p["url"],
+                "r": ext.get("Rarity", ""), "t": kind(ext["Number"], g["name"]),
             }
     if not cards:
         raise SystemExit("Aucune carte récupérée : on n'écrit rien.")
