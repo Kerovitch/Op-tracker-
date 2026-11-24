@@ -79,6 +79,23 @@ def usd_to_eur():
         return None
 
 
+PAREN_RE = re.compile(r"\(([^)]*)\)")
+
+
+def variant(name, number):
+    """Variante lue dans le nom TCGplayer : Alternate Art, Manga, etc. (hors code de carte)."""
+    toks = [t.strip() for t in PAREN_RE.findall(name)]
+    toks = [t for t in toks if t and t.upper() != number.upper()
+            and not re.fullmatch(r"[A-Za-z]{0,3}\d{0,2}-?\d{1,3}", t)]
+    joined = " / ".join(toks)
+    low = joined.lower()
+    if "manga" in low:
+        return "Manga"
+    if "alternate art" in low or "parallel" in low:
+        return "Alternate Art"
+    return joined or "Standard"
+
+
 def kind(number, group_name):
     if "promo" in group_name.lower():
         return "Promo"
@@ -95,9 +112,11 @@ def pct(now, old):
 def main():
     today = datetime.date.today()
     os.makedirs(SNAP_DIR, exist_ok=True)
-    cards, tcg_codes = {}, {}
+    cards, tcg_codes, sets = {}, {}, {}
     for g in get(f"{BASE}/groups"):
         gid = g["groupId"]
+        sets[str(gid)] = {"n": g["name"], "a": g.get("abbreviation") or "",
+                          "d": str(g.get("publishedOn") or "")[:10]}
         products = {p["productId"]: p for p in get(f"{BASE}/{gid}/products")}
         for p in products.values():
             num = {e["name"]: e["value"] for e in p.get("extendedData", [])}.get("Number")
@@ -118,6 +137,7 @@ def main():
                 "s": g.get("abbreviation") or g["name"],
                 "p": round(price, 2), "u": p["url"],
                 "r": ext.get("Rarity", ""), "t": kind(ext["Number"], g["name"]),
+                "g": gid, "q": variant(p["name"], ext["Number"]),
             }
     if not cards:
         raise SystemExit("Aucune carte récupérée : on n'écrit rien.")
@@ -134,6 +154,10 @@ def main():
     fx = usd_to_eur()
     try:
         cm_date, cm_rows, cm_codes = cardmarket()
+        by_code = {m["c"]: m for m in cm_rows if m["c"] and cm_codes.get(m["c"]) == 1}
+        for c in rows:  # prix Cardmarket ajouté au catalogue si la carte est unique des deux côtés
+            if len(tcg_codes.get(c["c"], ())) == 1 and c["c"] in by_code:
+                c["e"] = by_code[c["c"]]["e"]
         if fx:  # écart EUR vs USD seulement si le code est unique des deux côtés
             us = {}
             for c in rows:
@@ -147,7 +171,7 @@ def main():
         print(f"Cardmarket : {len(cm_rows)} cartes")
     except Exception as e:  # on garde les données TCGplayer quoi qu'il arrive
         print(f"ATTENTION Cardmarket indisponible : {e}")
-    json.dump({"updated": str(today), "source": "TCGCSV / TCGplayer", "fx": fx, "rows": rows, "cm": cm},
+    json.dump({"updated": str(today), "source": "TCGCSV / TCGplayer", "fx": fx, "sets": sets, "rows": rows, "cm": cm},
               open("signals.json", "w"), separators=(",", ":"))
 
     for f in os.listdir(SNAP_DIR):  # garde 30 jours
