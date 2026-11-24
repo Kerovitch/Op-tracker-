@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="fr"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OP Cards Tracker</title>
+<style>
+:root{--bg:#f6f4ef;--card:#fff;--tx:#1b1f2a;--mu:#6b7080;--ac:#c8372d;--ok:#1f8a4c;--bad:#c8372d;--bd:#e3e0d8;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14161d;--card:#1e212b;--tx:#eceef4;--mu:#9aa0b2;--ac:#ff6a5e;--ok:#4cc380;--bad:#ff7a70;--bd:#2c303d}}
+:root[data-theme="dark"]{--bg:#14161d;--card:#1e212b;--tx:#eceef4;--mu:#9aa0b2;--ac:#ff6a5e;--ok:#4cc380;--bad:#ff7a70;--bd:#2c303d}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:84px}
+main{max-width:720px;margin:0 auto;padding:14px}
+h1{font-size:20px;margin:4px 0 2px}
+.sub{color:var(--mu);font-size:13px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px}
+.k{color:var(--mu);font-size:12px}
+.v{font-size:21px;font-weight:700;margin-top:2px}
+.pos{color:var(--ok)}.neg{color:var(--bad)}
+h2{font-size:15px;margin:18px 0 8px}
+.row{display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--bd)}
+.row:last-child{border-bottom:0}
+.sm{font-size:12px;color:var(--mu)}
+label{display:block;font-size:12px;color:var(--mu);margin:10px 0 4px}
+input,select{width:100%;padding:11px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.seg button{padding:11px;border-radius:10px;border:1px solid var(--bd);background:var(--bg);color:var(--tx);font:inherit;font-weight:600}
+.seg button.on{background:var(--ac);border-color:var(--ac);color:#fff}
+.btn{width:100%;margin-top:16px;padding:13px;border:0;border-radius:12px;background:var(--ac);color:#fff;font:inherit;font-weight:700}
+.del{background:none;border:0;color:var(--mu);font-size:18px;padding:0 4px}
+.toast{margin-top:10px;color:var(--ok);font-size:14px;min-height:20px}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--bd);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav button{flex:1;padding:12px 4px;border:0;background:none;color:var(--mu);font:inherit;font-size:12px}
+nav button b{display:block;font-size:20px;font-weight:400}
+nav button.on{color:var(--ac);font-weight:700}
+.empty{color:var(--mu);text-align:center;padding:30px 10px}
+</style></head>
+<body>
+<main>
+<h1>🏴‍☠️ OP Cards Tracker</h1>
+<div class="sub" id="status">Chargement…</div>
+<div id="view"></div>
+</main>
+<nav id="nav"></nav>
+<script>
+const h=(t,a={},...c)=>{const e=document.createElement(t);for(const k in a){if(k==='class')e.className=a[k];else if(k.startsWith('on'))e.addEventListener(k.slice(2),a[k]);else e.setAttribute(k,a[k])}c.flat().forEach(x=>e.append(x instanceof Node?x:document.createTextNode(x==null?'':String(x))));return e};
+const eur=n=>new Intl.NumberFormat('fr-FR',{style:'currency',currency:'EUR'}).format(n||0);
+const today=()=>new Date().toISOString().slice(0,10);
+let sig=null,sigF='stock',items=[],tab='sum',ref=null,loaded=false,form={type:'achat',date:today(),platform:'Cardmarket'},toast='';
+const PLATS=['Cardmarket','eBay','Vinted','Leboncoin','TCGplayer','Magasin / boutique','Autre'];
+
+function setStatus(t){document.getElementById('status').textContent=t}
+function compute(){
+  const s=[...items].sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:a.ts-b.ts);
+  const inv={};let profit=0,rev=0,spent=0,sold=0,cogs=0;
+  for(const t of s){
+    const k=(t.code||t.name).trim().toUpperCase();
+    const i=inv[k]||(inv[k]={name:t.name,code:t.code,qty:0,cost:0,profit:0,sold:0});
+    if(t.type==='achat'){const c=t.qty*t.price+t.fees;i.qty+=t.qty;i.cost+=c;spent+=c}
+    else{
+      const avg=i.qty>0?i.cost/i.qty:0,net=t.qty*t.price-t.fees,cg=t.qty*avg,p=net-cg;
+      i.profit+=p;profit+=p;rev+=net;cogs+=cg;i.sold+=t.qty;sold+=t.qty;i.qty-=t.qty;i.cost-=cg;
+      if(i.qty<0){i.qty=0;i.cost=0}
+    }
+  }
+  const stockCost=Object.values(inv).reduce((a,x)=>a+x.cost,0);
+  return{inv,profit,rev,spent,sold,cogs,stockCost,roi:cogs>0?profit/cogs:0};
+}
+function save(){try{localStorage.setItem('opt',JSON.stringify(items))}catch(e){setStatus('⚠️ Sauvegarde locale impossible')}}
+function stat(k,v,cls){return h('div',{class:'card'},h('div',{class:'k'},k),h('div',{class:'v '+(cls||'')},v))}
+const sign=n=>n>=0?'pos':'neg';
+
+function viewSum(){
+  const c=compute(),box=h('div');
+  box.append(h('div',{class:'grid'},
+    stat('Profit réalisé',eur(c.profit),sign(c.profit)),
+    stat('ROI sur ventes',(c.roi*100).toFixed(1)+' %',sign(c.roi)),
+    stat('Stock (au coût)',eur(c.stockCost)),
+    stat('Chiffre d’affaires net',eur(c.rev)),
+    stat('Total acheté',eur(c.spent)),
+    stat('Cartes vendues',c.sold)));
+  const top=Object.values(c.inv).filter(x=>x.sold>0).sort((a,b)=>b.profit-a.profit).slice(0,5);
+  box.append(h('h2',{},'Meilleures cartes'));
+  box.append(top.length?h('div',{class:'card'},top.map(x=>h('div',{class:'row'},h('div',{},x.name,h('div',{class:'sm'},x.code||'')),h('b',{class:sign(x.profit)},eur(x.profit))))):h('div',{class:'empty'},'Aucune vente enregistrée pour le moment.'));
+  box.append(h('div',{class:'sub',style:'margin-top:14px'},'Profit calculé au coût moyen par carte, frais inclus.'));
+  box.append(h('h2',{},'Sauvegarde (changer d’appareil)'),h('div',{class:'two'},h('button',{class:'btn',style:'margin-top:0',onclick:exportData},'Exporter'),h('button',{class:'btn',style:'margin-top:0',onclick:importData},'Importer')));
+  return box;
+}
+function exportData(){const a=h('a',{href:URL.createObjectURL(new Blob([JSON.stringify(items)],{type:'application/json'})),download:'op-tracker-'+today()+'.json'});document.body.append(a);a.click();a.remove()}
+function importData(){const i=h('input',{type:'file',accept:'.json,application/json'});i.addEventListener('change',async()=>{try{const d=JSON.parse(await i.files[0].text());if(!Array.isArray(d))throw 0;if(confirm('Remplacer les '+items.length+' transactions actuelles par '+d.length+' importées ?')){items=d;save();render()}}catch(e){alert('Fichier invalide.')}});i.click()}
+function viewAdd(){
+  const names=[...new Set(items.map(t=>t.name))];
+  const f=(id,v)=>{const e=document.getElementById(id);return e?e.value:v};
+  const box=h('div',{class:'card'});
+  const seg=h('div',{class:'seg'},['achat','vente'].map(t=>h('button',{type:'button',class:form.type===t?'on':'',onclick:()=>{form.type=t;render()}},t==='achat'?'Achat':'Vente')));
+  const dl=h('datalist',{id:'names'},names.map(n=>h('option',{value:n})));
+  const name=h('input',{id:'name',list:'names',placeholder:'Ex : Monkey D. Luffy (Alt Art)',autocomplete:'off'});
+  const code=h('input',{id:'code',placeholder:'Ex : OP05-119'});
+  name.addEventListener('change',()=>{const m=items.find(t=>t.name===name.value);if(m){code.value=m.code||'';document.getElementById('set').value=m.set||''}});
+  const plat=h('select',{id:'plat'},PLATS.map(p=>h('option',{value:p,...(p===form.platform?{selected:''}:{})},p)));
+  box.append(seg,dl,
+    h('label',{},'Carte'),name,
+    h('div',{class:'two'},h('div',{},h('label',{},'Code'),code),h('div',{},h('label',{},'Set'),h('input',{id:'set',placeholder:'Ex : OP05'}))),
+    h('div',{class:'two'},h('div',{},h('label',{},'Quantité'),h('input',{id:'qty',type:'number',min:'1',value:'1',inputmode:'numeric'})),h('div',{},h('label',{},'Prix unitaire (€)'),h('input',{id:'price',type:'number',min:'0',step:'0.01',inputmode:'decimal'}))),
+    h('div',{class:'two'},h('div',{},h('label',{},'Frais / port (€)'),h('input',{id:'fees',type:'number',min:'0',step:'0.01',value:'0',inputmode:'decimal'})),h('div',{},h('label',{},'Date'),h('input',{id:'date',type:'date',value:form.date}))),
+    h('label',{},'Plateforme'),plat,
+    h('label',{},'Note (optionnel)'),h('input',{id:'note'}),
+    h('button',{class:'btn',onclick:add},'Enregistrer'),
+    h('div',{class:'toast',id:'toast'},toast));
+  return box;
+}
+function add(){
+  const g=id=>document.getElementById(id).value.trim();
+  const name=g('name'),qty=parseInt(g('qty'),10),price=parseFloat(g('price')),fees=parseFloat(g('fees')||'0')||0;
+  const t=document.getElementById('toast');
+  if(!name||!(qty>0)||!(price>=0)||g('price')===''){t.style.color='var(--bad)';t.textContent='Nom, quantité et prix sont requis.';return}
+  items.push({id:Date.now().toString(36),ts:Date.now(),type:form.type,name,code:g('code'),set:g('set'),qty,price,fees,date:g('date')||today(),platform:g('plat'),note:g('note')});
+  form.date=g('date')||today();form.platform=g('plat');
+  toast='✓ '+(form.type==='achat'?'Achat':'Vente')+' enregistré(e)';
+  save();render();
+}
+function viewHist(){
+  if(!items.length)return h('div',{class:'empty'},'Aucune transaction. Ajoute ton premier achat !');
+  const s=[...items].sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:b.ts-a.ts);
+  return h('div',{class:'card'},s.map(t=>h('div',{class:'row'},
+    h('div',{},h('b',{},t.name),h('div',{class:'sm'},[t.date,t.code,t.platform,t.qty+' × '+eur(t.price),t.fees?'frais '+eur(t.fees):''].filter(Boolean).join(' · ')),t.note?h('div',{class:'sm'},t.note):''),
+    h('div',{style:'text-align:right'},h('b',{class:t.type==='vente'?'pos':''},(t.type==='vente'?'+':'−')+eur(t.qty*t.price)),h('div',{},h('button',{class:'del',title:'Supprimer',onclick:()=>{if(confirm('Supprimer cette transaction ?')){items=items.filter(x=>x.id!==t.id);save();render()}}},'🗑')))
+  )));
+}
+function viewStock(){
+  const c=compute(),list=Object.values(c.inv).filter(x=>x.qty>0).sort((a,b)=>b.cost-a.cost);
+  if(!list.length)return h('div',{class:'empty'},'Stock vide.');
+  return h('div',{},h('div',{class:'sub'},list.reduce((a,x)=>a+x.qty,0)+' cartes · '+eur(c.stockCost)+' au coût'),
+    h('div',{class:'card'},list.map(x=>h('div',{class:'row'},h('div',{},h('b',{},x.name),h('div',{class:'sm'},x.code||'')),h('div',{style:'text-align:right'},h('b',{},'×'+x.qty),h('div',{class:'sm'},'coût moy. '+eur(x.cost/x.qty)))))));
+}
+function viewSig(){
+  if(!sig||!sig.rows)return h('div',{class:'empty'},'Aucun signal pour le moment. Lance l’action GitHub « Prix quotidiens » une première fois.');
+  const c=compute(),own=k=>{const x=c.inv[String(k||'').toUpperCase()];return x&&x.qty>0?x:null};
+  const box=h('div');
+  box.append(h('div',{class:'sub'},'Mis à jour : '+sig.updated+' · '+sig.source+' · prix en $ · hausses/baisses : cartes ≥ 5 $'));
+  const F=[['stock','Mon stock'],['up','Hausses 7 j'],['down','Baisses 7 j']];
+  box.append(h('div',{class:'seg',style:'grid-template-columns:repeat(3,1fr);margin-bottom:10px'},F.map(([k,l])=>h('button',{type:'button',class:sigF===k?'on':'',onclick:()=>{sigF=k;render()}},l))));
+  let r=sig.rows;
+  r=sigF==='stock'?r.filter(x=>own(x.c)):sigF==='up'?r.filter(x=>x.d7>0&&x.p>=5).sort((a,b)=>b.d7-a.d7):r.filter(x=>x.d7<0&&x.p>=5).sort((a,b)=>a.d7-b.d7);
+  if(!r.length){box.append(h('div',{class:'empty'},sigF==='stock'?'Aucune carte de ton stock dans les signaux (le code doit correspondre, ex : OP05-119).':'Rien à signaler.'));return box}
+  const pc=n=>(n>0?'+':'')+(n==null?'–':n.toFixed(1)+' %');
+  box.append(h('div',{class:'card'},r.slice(0,50).map(x=>{const o=own(x.c);const nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
+    return h('div',{class:'row'},h('div',{},nm,h('div',{class:'sm'},[x.c,x.s,'$'+x.p.toFixed(2),'24 h '+pc(x.d1)].join(' · ')),o?h('div',{class:'sm'},'📦 en stock ×'+o.qty+' · coût moy. '+eur(o.cost/o.qty)):''),h('b',{class:x.d7>=0?'pos':'neg'},pc(x.d7)))})));
+  box.append(h('div',{class:'sub',style:'margin-top:12px'},'Signaux de tendance (marché US), pas des garanties. Vérifie le prix sur Cardmarket avant d’agir.'));
+  return box;
+}
+function render(){
+  const v=document.getElementById('view');v.replaceChildren(tab==='sum'?viewSum():tab==='add'?viewAdd():tab==='hist'?viewHist():tab==='sig'?viewSig():viewStock());
+  const T=[['sum','📊','Résumé'],['add','➕','Ajouter'],['hist','🧾','Historique'],['stock','📦','Stock'],['sig','📈','Signaux']];
+  document.getElementById('nav').replaceChildren(...T.map(([k,i,l])=>h('button',{class:tab===k?'on':'',onclick:()=>{tab=k;toast='';render();window.scrollTo(0,0)}},h('b',{},i),l)));
+}
+(async()=>{
+  try{items=JSON.parse(localStorage.getItem('opt')||'[]')}catch(e){}
+  setStatus('Données stockées sur cet appareil');render();
+  try{const r=await fetch('signals.json',{cache:'no-cache'});if(r.ok){sig=await r.json();setStatus('Données sur cet appareil · signaux du '+sig.updated);if(tab==='sig')render()}}catch(e){}
+})();
+</script>
+</body></html>
