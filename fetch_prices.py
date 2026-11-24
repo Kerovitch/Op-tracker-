@@ -1,5 +1,5 @@
 """Récupère les prix One Piece (TCGCSV, catégorie 68) une fois par jour et calcule les variations."""
-import datetime, json, os, time
+import datetime, json, os, re, time
 import requests
 
 BASE = "https://tcgcsv.com/tcgplayer/68"
@@ -23,6 +23,62 @@ def find_snapshot(today, back, tol):
     return None
 
 
+CM_BASE = "https://downloads.s3.cardmarket.com/productCatalog"
+CM_GAME = 18          # One Piece chez Cardmarket
+CM_MIN = 3.0          # on garde les cartes à 3 € et plus
+CODE = r"(?:(?:OP|EB|PRB|ST)\d{2}-\d{3}|P-\d{3})"
+CODE_RE = re.compile(r"\((" + CODE + r")\)")
+VER_RE = re.compile(r"\(V\.(\d+)\)")
+CLEAN_RE = re.compile(r"\s*\((?:" + CODE + r"|V\.\d+)\)")
+
+
+def get_json(url):
+    r = requests.get(url, headers=HEADERS, timeout=180)
+    r.raise_for_status()
+    return r.json()
+
+
+def r2(v):
+    return round(v, 2) if isinstance(v, (int, float)) else None
+
+
+def cardmarket():
+    """Prix Cardmarket (EUR) depuis les fichiers publics quotidiens. Renvoie (date, lignes, codes_par_nb)."""
+    guide = get_json(f"{CM_BASE}/priceGuide/price_guide_{CM_GAME}.json")
+    catalog = get_json(f"{CM_BASE}/productList/products_singles_{CM_GAME}.json")
+    prices = {g["idProduct"]: g for g in guide.get("priceGuides", [])}
+    products = catalog.get("products", [])
+    with_code = sum(1 for p in products if CODE_RE.search(p.get("name", "")))
+    if not products or with_code < len(products) / 2:
+        raise RuntimeError("Le fichier Cardmarket ne ressemble pas à One Piece (game 18) : abandon.")
+    per_code, rows = {}, []
+    for p in products:
+        name = p.get("name", "")
+        m, v = CODE_RE.search(name), VER_RE.search(name)
+        code = m.group(1) if m else ""
+        if code:
+            per_code[code] = per_code.get(code, 0) + 1
+        g = prices.get(p["idProduct"])
+        trend = g.get("trend") if g else None
+        if trend is None or trend < CM_MIN:
+            continue
+        rows.append({
+            "i": p["idProduct"], "n": CLEAN_RE.sub("", name).strip(), "c": code,
+            "v": f"V.{v.group(1)}" if v else "", "e": r2(trend), "l": r2(g.get("low")),
+            "a1": r2(g.get("avg1")), "a7": r2(g.get("avg7")), "a30": r2(g.get("avg30")),
+            "u": f"https://www.cardmarket.com/en/OnePiece/Products?idProduct={p['idProduct']}",
+        })
+    return str(guide.get("createdAt", ""))[:10], rows, per_code
+
+
+def usd_to_eur():
+    try:
+        r = requests.get("https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR", timeout=30)
+        return float(r.json()["rates"]["EUR"])
+    except Exception:
+        return None
+
+
 def kind(number, group_name):
     if "promo" in group_name.lower():
         return "Promo"
@@ -39,10 +95,14 @@ def pct(now, old):
 def main():
     today = datetime.date.today()
     os.makedirs(SNAP_DIR, exist_ok=True)
-    cards = {}
+    cards, tcg_codes = {}, {}
     for g in get(f"{BASE}/groups"):
         gid = g["groupId"]
         products = {p["productId"]: p for p in get(f"{BASE}/{gid}/products")}
+        for p in products.values():
+            num = {e["name"]: e["value"] for e in p.get("extendedData", [])}.get("Number")
+            if num:
+                tcg_codes.setdefault(num, set()).add(p["productId"])
         for pr in get(f"{BASE}/{gid}/prices"):
             p = products.get(pr["productId"])
             price = pr.get("marketPrice")
@@ -70,7 +130,24 @@ def main():
         c["d1"] = pct(c["p"], old1.get(str(pid))) if old1 else None
         c["d7"] = pct(c["p"], old7.get(str(pid))) if old7 else None
         rows.append(c)
-    json.dump({"updated": str(today), "source": "TCGCSV / TCGplayer", "rows": rows},
+    cm = None
+    fx = usd_to_eur()
+    try:
+        cm_date, cm_rows, cm_codes = cardmarket()
+        if fx:  # écart EUR vs USD seulement si le code est unique des deux côtés
+            us = {}
+            for c in rows:
+                if len(tcg_codes.get(c["c"], ())) == 1:
+                    us[c["c"]] = c["p"]
+            for m in cm_rows:
+                if m["c"] in us and cm_codes.get(m["c"]) == 1:
+                    m["us"] = us[m["c"]]
+                    m["x"] = round((m["e"] / (us[m["c"]] * fx) - 1) * 100, 1)
+        cm = {"updated": cm_date, "rows": cm_rows}
+        print(f"Cardmarket : {len(cm_rows)} cartes")
+    except Exception as e:  # on garde les données TCGplayer quoi qu'il arrive
+        print(f"ATTENTION Cardmarket indisponible : {e}")
+    json.dump({"updated": str(today), "source": "TCGCSV / TCGplayer", "fx": fx, "rows": rows, "cm": cm},
               open("signals.json", "w"), separators=(",", ":"))
 
     for f in os.listdir(SNAP_DIR):  # garde 30 jours
