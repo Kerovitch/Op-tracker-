@@ -48,7 +48,7 @@ nav button.on{color:var(--ac);font-weight:700}
 const h=(t,a={},...c)=>{const e=document.createElement(t);for(const k in a){if(k==='class')e.className=a[k];else if(k.startsWith('on'))e.addEventListener(k.slice(2),a[k]);else e.setAttribute(k,a[k])}c.flat().forEach(x=>e.append(x instanceof Node?x:document.createTextNode(x==null?'':String(x))));return e};
 const eur=n=>new Intl.NumberFormat('fr-FR',{style:'currency',currency:'EUR'}).format(n||0);
 const today=()=>new Date().toISOString().slice(0,10);
-let sig=null,sigF='stock',items=[],tab='sum',ref=null,loaded=false,form={type:'achat',date:today(),platform:'Cardmarket'},toast='';
+let sig=null,sigF='stock',cat={t:'',r:'',min:5},items=[],tab='sum',ref=null,loaded=false,form={type:'achat',date:today(),platform:'Cardmarket'},toast='';
 const PLATS=['Cardmarket','eBay','Vinted','Leboncoin','TCGplayer','Magasin / boutique','Autre'];
 
 function setStatus(t){document.getElementById('status').textContent=t}
@@ -140,8 +140,9 @@ function viewSig(){
   const c=compute(),own=k=>{const x=c.inv[String(k||'').toUpperCase()];return x&&x.qty>0?x:null};
   const box=h('div');
   box.append(h('div',{class:'sub'},'Mis à jour : '+sig.updated+' · '+sig.source+' · prix en $ · hausses/baisses : cartes ≥ 5 $'));
-  const F=[['stock','Mon stock'],['up','Hausses 7 j'],['down','Baisses 7 j']];
-  box.append(h('div',{class:'seg',style:'grid-template-columns:repeat(3,1fr);margin-bottom:10px'},F.map(([k,l])=>h('button',{type:'button',class:sigF===k?'on':'',onclick:()=>{sigF=k;render()}},l))));
+  const F=[['stock','Stock'],['up','Hausses'],['down','Baisses'],['cat','Catalogue']];
+  box.append(h('div',{class:'seg',style:'grid-template-columns:repeat(4,1fr);margin-bottom:10px'},F.map(([k,l])=>h('button',{type:'button',class:sigF===k?'on':'',onclick:()=>{sigF=k;render()}},l))));
+  if(sigF==='cat')return viewCat(box,own);
   let r=sig.rows;
   r=sigF==='stock'?r.filter(x=>own(x.c)):sigF==='up'?r.filter(x=>x.d7>0&&x.p>=5).sort((a,b)=>b.d7-a.d7):r.filter(x=>x.d7<0&&x.p>=5).sort((a,b)=>a.d7-b.d7);
   if(!r.length){box.append(h('div',{class:'empty'},sigF==='stock'?'Aucune carte de ton stock dans les signaux (le code doit correspondre, ex : OP05-119).':'Rien à signaler.'));return box}
@@ -149,6 +150,21 @@ function viewSig(){
   box.append(h('div',{class:'card'},r.slice(0,50).map(x=>{const o=own(x.c);const nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
     return h('div',{class:'row'},h('div',{},nm,h('div',{class:'sm'},[x.c,x.s,'$'+x.p.toFixed(2),'24 h '+pc(x.d1)].join(' · ')),o?h('div',{class:'sm'},'📦 en stock ×'+o.qty+' · coût moy. '+eur(o.cost/o.qty)):''),h('b',{class:x.d7>=0?'pos':'neg'},pc(x.d7)))})));
   box.append(h('div',{class:'sub',style:'margin-top:12px'},'Signaux de tendance (marché US), pas des garanties. Vérifie le prix sur Cardmarket avant d’agir.'));
+  return box;
+}
+function viewCat(box,own){
+  const rows=sig.rows;
+  if(!rows.some(x=>x.t)){box.append(h('div',{class:'empty'},'Relance « Prix quotidiens » sur GitHub : le fichier n’a pas encore les raretés.'));return box}
+  const types=[...new Set(rows.map(x=>x.t).filter(Boolean))].sort(),rars=[...new Set(rows.map(x=>x.r).filter(Boolean))].sort();
+  const sel=(k,opts,all)=>h('select',{onchange:e=>{cat[k]=e.target.value;render()}},h('option',{value:''},all),opts.map(o=>h('option',{value:o,...(cat[k]===o?{selected:''}:{})},o)));
+  box.append(h('div',{class:'two'},h('div',{},h('label',{},'Série'),sel('t',types,'Toutes')),h('div',{},h('label',{},'Rareté'),sel('r',rars,'Toutes'))),
+    h('label',{},'Prix minimum ($)'),h('input',{type:'number',min:'0',step:'1',value:cat.min,inputmode:'decimal',onchange:e=>{cat.min=parseFloat(e.target.value)||0;render()}}));
+  const r=rows.filter(x=>(!cat.t||x.t===cat.t)&&(!cat.r||x.r===cat.r)&&x.p>=cat.min).sort((a,b)=>b.p-a.p);
+  box.append(h('div',{class:'sub',style:'margin-top:10px'},r.length+' cartes'+(r.length>100?' (100 premières)':'')));
+  box.append(r.length?h('div',{class:'card'},r.slice(0,100).map(x=>{
+    const o=own(x.c),nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
+    return h('div',{class:'row'},h('div',{},nm,h('div',{class:'sm'},[x.c,x.s,x.r,x.t].filter(Boolean).join(' · ')),o?h('div',{class:'sm'},'📦 en stock ×'+o.qty):''),
+      h('div',{style:'text-align:right'},h('b',{},'$'+x.p.toFixed(2)),h('div',{class:'sm '+(x.d7>0?'pos':x.d7<0?'neg':'')},x.d7==null?'':(x.d7>0?'+':'')+x.d7+' %')))})):h('div',{class:'empty'},'Aucune carte.'));
   return box;
 }
 function render(){
