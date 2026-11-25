@@ -50,7 +50,7 @@ const h=(t,a={},...c)=>{const e=document.createElement(t);for(const k in a){if(k
 const eur=n=>new Intl.NumberFormat('fr-FR',{style:'currency',currency:'EUR'}).format(n||0);
 const today=()=>new Date().toISOString().slice(0,10);
 let sig=null,sigF='opp',cat={q:'',t:'',g:'',r:'',v:'',min:5,sort:'price_desc',n:100},items=[],tab='sum',ref=null,loaded=false,form={type:'achat',date:today(),platform:'Cardmarket'},toast='';
-const PLATS=['Cardmarket','eBay','Vinted','Leboncoin','TCGplayer','Magasin / boutique','Autre'];
+const PLATS=['Cardmarket','CardTrader','eBay','Vinted','Leboncoin','TCGplayer','Magasin / boutique','Autre'];
 
 function setStatus(t){document.getElementById('status').textContent=t}
 function compute(){
@@ -87,7 +87,99 @@ function viewSum(){
   box.append(top.length?h('div',{class:'card'},top.map(x=>h('div',{class:'row'},h('div',{},x.name,h('div',{class:'sm'},x.code||'')),h('b',{class:sign(x.profit)},eur(x.profit))))):h('div',{class:'empty'},'Aucune vente enregistrée pour le moment.'));
   box.append(h('div',{class:'sub',style:'margin-top:14px'},'Profit calculé au coût moyen par carte, frais inclus.'));
   box.append(h('h2',{},'Sauvegarde (changer d’appareil)'),h('div',{class:'two'},h('button',{class:'btn',style:'margin-top:0',onclick:exportData},'Exporter'),h('button',{class:'btn',style:'margin-top:0',onclick:importData},'Importer')));
+  box.append(ctCard());
   return box;
+}
+const CT='https://api.cardtrader.com/api/v2',CT_CODE=/\b((?:OP|EB|PRB|ST)\d{2}-\d{3}|P-\d{3})\b/i;
+let ctMsg='',ctBad=false;
+function ctSay(t,bad){ctMsg=t;ctBad=!!bad;const e=document.getElementById('ctMsg');if(e){e.textContent=t;e.style.color=bad?'var(--bad)':'var(--ok)'}}
+async function ctGet(path,tok){
+  const r=await fetch(CT+path,{headers:{Authorization:'Bearer '+tok}});
+  if(r.status===401||r.status===403)throw new Error('AUTH');
+  if(r.status===429)throw new Error('RATE');
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  return r.json();
+}
+const ctList=x=>Array.isArray(x)?x:(x&&x.array)||[];
+function ctToken(){
+  const v=(document.getElementById('ctTok').value||'').trim().replace(/^Bearer\s+/i,'');
+  try{if(v&&document.getElementById('ctKeep').checked)localStorage.setItem('ct_tok',v);else localStorage.removeItem('ct_tok')}catch(e){}
+  return v;
+}
+const ctErr=e=>e.message==='AUTH'?'Jeton refusé : vérifie-le dans CardTrader (paramètres du profil).':e.message==='RATE'?'Trop de requêtes, réessaie dans une minute.':e instanceof TypeError?'Connexion à CardTrader impossible : le navigateur est probablement bloqué (CORS) ou le réseau est coupé. Dis-le-moi : je te propose l’option script sur PC.':'Erreur CardTrader ('+e.message+').';
+async function ctTest(){
+  const t=ctToken();if(!t)return ctSay('Colle d’abord ton jeton.',1);
+  ctSay('Test en cours…');
+  try{const i=await ctGet('/info',t);ctSay('✓ Connexion OK'+(i&&i.name?' ('+i.name+')':'')+'. Tu peux importer.')}catch(e){ctSay(ctErr(e),1)}
+}
+async function ctImport(){
+  const tok=ctToken();if(!tok)return ctSay('Colle d’abord ton jeton.',1);
+  try{
+    ctSay('Recherche du jeu One Piece…');
+    const op=ctList(await ctGet('/games',tok)).find(g=>/one\s*piece/i.test((g.display_name||'')+' '+(g.name||'')));
+    if(!op)return ctSay('Jeu One Piece introuvable dans CardTrader.',1);
+    const have=new Set(items.map(t=>t.ext).filter(Boolean));
+    const st={A:0,V:0,dup:0,other:0,noEur:0,noCode:0,orders:0};let n=0;
+    for(const role of ['buyer','seller']){
+      const seen=new Set();
+      for(let page=1;page<=60;page++){
+        ctSay('Lecture des '+(role==='buyer'?'achats':'ventes')+' (page '+page+')…');
+        const orders=ctList(await ctGet('/orders?order_as='+role+'&sort=date.desc&page='+page+'&limit=100',tok));
+        if(!orders.length||seen.has(orders[0].id))break;
+        orders.forEach(o=>seen.add(o.id));st.orders+=orders.length;
+        for(const o of orders){
+          if(!['paid','sent','arrived','done'].includes(String(o.state||'')))continue;
+          const pr=i=>{const p=role==='buyer'?(i.buyer_price||i.price):(i.seller_price||i.price);return p&&typeof p.cents==='number'?p:null};
+          const mine=[];
+          for(const i of (o.order_items||[])){
+            if(Number(i.game_id)!==op.id){st.other++;continue}
+            const p=pr(i);if(!p||p.currency!=='EUR'){st.noEur++;continue}
+            mine.push({i,unit:p.cents/100,qty:Number(i.quantity)||1});
+          }
+          const total=mine.reduce((a,x)=>a+x.unit*x.qty,0);
+          const ex=role==='buyer'?(o.order_shipping_method&&o.order_shipping_method.buyer_price):(o.seller_fee_amount||o.fee_amount);
+          const extra=ex&&ex.currency==='EUR'?ex.cents/100:0;
+          const date=String(o.paid_at||o.created_at||o.sent_at||o.updated_at||'').slice(0,10)||today();
+          for(const {i,unit,qty} of mine){
+            const ext='ct:'+o.id+':'+(i.id||i.blueprint_id);
+            if(have.has(ext)){st.dup++;continue}
+            const pp=i.properties_hash||i.properties||{},lk=Object.keys(pp).find(k=>/language/i.test(k)),lv=lk?String(pp[lk]).toLowerCase():'';
+            const lang=!lv?'EN':/^(en|english)/.test(lv)?'EN':/^(jp|ja|japanese)/.test(lv)?'JP':/^(fr|french)/.test(lv)?'FR':'Autre';
+            const raw=String(i.name||i.name_en||''),m=(raw+' '+(i.collector_number||'')+' '+JSON.stringify(pp)).match(CT_CODE),code=m?m[1].toUpperCase():'';
+            if(!code)st.noCode++;
+            items.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),ts:Date.now()+(n++),type:role==='buyer'?'achat':'vente',
+              name:raw.replace(/\s*\(?\b(?:(?:OP|EB|PRB|ST)\d{2}-\d{3}|P-\d{3})\b\)?/i,'').trim()||raw,code,set:code?code.split('-')[0]:'',qty,price:unit,
+              fees:total>0?Math.round(extra*unit*qty/total*100)/100:0,date,platform:'CardTrader',
+              note:'CardTrader #'+o.id+(pp.condition?' · '+pp.condition:''),ver:'',lang,ext});
+            have.add(ext);role==='buyer'?st.A++:st.V++;
+          }
+        }
+        await new Promise(r=>setTimeout(r,120));
+      }
+    }
+    save();render();
+    ctSay('✓ '+(st.A+st.V)+' importées ('+st.A+' achats, '+st.V+' ventes) sur '+st.orders+' commandes lues. Déjà présentes : '+st.dup+' · hors One Piece : '+st.other+' · hors € ignorées : '+st.noEur+' · sans code carte : '+st.noCode+'.');
+  }catch(e){ctSay(ctErr(e),1)}
+}
+function ctShape(){
+  const tok=ctToken();if(!tok)return ctSay('Colle d’abord ton jeton.',1);
+  const shape=(v,k)=>k==='properties_hash'?v:Array.isArray(v)?[v.length?shape(v[0]):'vide']:v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([a,b])=>[a,shape(b,a)])):v===null?'null':typeof v;
+  ctGet('/orders?order_as=buyer&sort=date.desc&limit=1',tok).then(l=>{
+    const o=ctList(l)[0],ta=document.getElementById('ctShape');
+    ta.style.display='block';ta.value=JSON.stringify(o?shape(o):'aucune commande',null,1);ta.select&&ta.select();
+    ctSay('Copie le contenu ci-dessous et envoie-le moi (types seulement, pas de données personnelles).');
+  }).catch(e=>ctSay(ctErr(e),1));
+}
+function ctCard(){
+  let saved='';try{saved=localStorage.getItem('ct_tok')||''}catch(e){}
+  return h('div',{},h('h2',{},'CardTrader'),h('div',{class:'card'},
+    h('div',{class:'sm'},'Jeton : CardTrader → paramètres du profil. Il reste sur cet appareil et n’est envoyé qu’à CardTrader.'),
+    h('label',{},'Jeton d’accès'),h('input',{id:'ctTok',type:'password',autocomplete:'off',value:saved}),
+    h('label',{style:'display:flex;gap:8px;align-items:center'},h('input',{id:'ctKeep',type:'checkbox',style:'width:auto',...(saved?{checked:''}:{})}),'Mémoriser sur cet appareil'),
+    h('div',{class:'two'},h('button',{class:'btn',style:'margin-top:12px',onclick:ctTest},'Tester'),h('button',{class:'btn',style:'margin-top:12px',onclick:ctImport},'Importer')),
+    h('button',{class:'btn',style:'background:var(--bd);color:var(--tx)',onclick:ctShape},'Copier la structure (diagnostic)'),
+    h('div',{class:'toast',id:'ctMsg',style:'color:'+(ctBad?'var(--bad)':'var(--ok)')},ctMsg),
+    h('textarea',{id:'ctShape',readonly:'',style:'display:none;width:100%;height:150px;margin-top:8px'})));
 }
 function exportData(){const a=h('a',{href:URL.createObjectURL(new Blob([JSON.stringify(items)],{type:'application/json'})),download:'op-tracker-'+today()+'.json'});document.body.append(a);a.click();a.remove()}
 function importData(){const i=h('input',{type:'file',accept:'.json,application/json'});i.addEventListener('change',async()=>{try{const d=JSON.parse(await i.files[0].text());if(!Array.isArray(d))throw 0;if(confirm('Remplacer les '+items.length+' transactions actuelles par '+d.length+' importées ?')){items=d;save();render()}}catch(e){alert('Fichier invalide.')}});i.click()}
@@ -140,6 +232,7 @@ function viewSig(){
   if(!sig||!sig.rows)return h('div',{class:'empty'},'Aucun signal pour le moment. Lance l’action GitHub « Prix quotidiens » une première fois.');
   const c=compute(),own=k=>Object.values(c.inv).find(i=>i.qty>0&&String(i.code||'').toUpperCase()===String(k||'').toUpperCase())||null;
   const box=h('div');
+  {const dd=Math.floor((Date.now()-Date.parse(sig.updated))/864e5);if(dd>=2)box.append(h('div',{class:'toast',style:'color:var(--bad)'},'⚠️ Données vieilles de '+dd+' jours : la mise à jour automatique ne tourne plus (voir l’onglet Actions sur GitHub).'))}
   box.append(h('div',{class:'sub'},'Mis à jour : '+sig.updated+' · '+sig.source+' · prix en $ · hausses/baisses : cartes ≥ 5 $'));
   const F=[['opp','Opportunités'],['stock','Mon stock'],['up','Hausses US'],['down','Baisses US'],['cat','Catalogue']];
   box.append(h('div',{class:'seg',style:'grid-template-columns:repeat(3,1fr);margin-bottom:10px'},F.map(([k,l])=>h('button',{type:'button',class:sigF===k?'on':'',onclick:()=>{sigF=k;render()}},l))));
@@ -154,6 +247,7 @@ function viewSig(){
   box.append(h('div',{class:'sub',style:'margin-top:12px'},'Signaux de tendance (marché US), pas des garanties. Vérifie le prix sur Cardmarket avant d’agir.'));
   return box;
 }
+const ctLine=ct=>ct?h('div',{class:'sm'},'🛒 CardTrader : '+Object.entries(ct).sort((a,b)=>(a[0]==='EN'?-1:b[0]==='EN'?1:0)).map(([l,v])=>l+' '+eur(v[0])).join(' · ')):'';
 const FEE=0.05,SELL_PCT=20,DEAL_PCT=15,MOM_PCT=15,MINP=8;
 function cmFor(code,ver){
   const l=((sig.cm&&sig.cm.rows)||[]).filter(x=>x.c===String(code||'').toUpperCase());if(!l.length)return null;
@@ -164,10 +258,16 @@ function cmRow(m,tags,right,extra){
   const nm=/^https:\/\//.test(m.u||'')?h('a',{href:m.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},m.n):h('b',{},m.n);
   return h('div',{class:'row'},h('div',{},nm,h('div',{class:'sm'},[m.c,m.v,'tendance '+eur(m.e),m.l!=null?'min. '+eur(m.l):''].filter(Boolean).join(' · ')),extra||'',h('div',{},tags.map(t=>h('span',{class:'tag'},t)))),right);
 }
+const SHIP=1.0,MOM_UP=10;
+let bud=(()=>{const d={min:5,max:70,mar:10};try{return Object.assign(d,JSON.parse(localStorage.getItem('opp_bud')||'{}'))}catch(e){return d}})();
 function viewOpp(box){
   if(!sig.cm||!sig.cm.rows||!sig.cm.rows.length){box.append(h('div',{class:'empty'},'Les prix Cardmarket ne sont pas encore dans le fichier. Mets à jour fetch_prices.py puis relance « Prix quotidiens ».'));return box}
   const c=compute(),pc=n=>(n>0?'+':'')+n.toFixed(0)+' %',cur=n=>h('b',{class:n>=0?'pos':'neg'},pc(n));
-  box.append(h('div',{class:'sub'},'Cardmarket · prix en € · fichier du '+sig.cm.updated));
+  const setB=(k,v)=>{bud[k]=v;try{localStorage.setItem('opp_bud',JSON.stringify(bud))}catch(e){}render()};
+  const num=(k,l)=>h('div',{},h('label',{},l),h('input',{type:'number',min:'0',value:bud[k],inputmode:'decimal',onchange:e=>setB(k,parseFloat(e.target.value)||0)}));
+  box.append(h('div',{class:'sub'},'Cardmarket + CardTrader + TCGplayer · prix en € · fichier du '+sig.cm.updated));
+  box.append(h('div',{class:'card'},h('div',{class:'two'},num('min','Budget min (€)'),num('max','Budget max (€)')),num('mar','Marge nette minimale (%)')));
+  // --- ton stock
   const sells=Object.values(c.inv).filter(x=>x.qty>0).map(x=>{
     const m=cmFor(x.code,x.ver);if(!m)return null;
     const avg=x.cost/x.qty,p=avg>0?(m.e*(1-FEE)-avg)/avg*100:0,tags=[];
@@ -178,16 +278,34 @@ function viewOpp(box){
     if(p<0&&down)tags.push('perte latente + baisse : à surveiller');
     return tags.length?{x,m,avg,p,tags}:null}).filter(Boolean).sort((a,b)=>b.p-a.p);
   box.append(h('h2',{},'À vendre ? (ton stock)'));
-  box.append(sells.length?h('div',{class:'card'},sells.map(s=>cmRow(s.m,s.tags,cur(s.p),h('div',{class:'sm'},'×'+s.x.qty+' · coût moy. '+eur(s.avg)+(s.x.ver?'':' · version V.1 supposée'))))):h('div',{class:'empty'},'Aucun signal sur ton stock (renseigne le code des cartes, ex : OP05-119).'));
-  const buys=sig.cm.rows.filter(m=>m.e>=MINP).map(m=>{
-    const tags=[];let s=0;
-    if(m.l!=null&&m.l<=m.e*(1-DEAL_PCT/100)){const d=(1-m.l/m.e)*100;tags.push('annonce '+d.toFixed(0)+' % sous la tendance');s+=d}
-    if(m.a7!=null&&m.a30>0&&m.a7>=m.a30*(1+MOM_PCT/100)){const d=(m.a7/m.a30-1)*100;tags.push('momentum '+pc(d)+' (7 j vs 30 j)');s+=d/2}
-    if(m.x!=null&&m.x<=-20){tags.push('≈'+Math.abs(m.x).toFixed(0)+' % moins cher qu’aux US');s+=Math.abs(m.x)/2}
-    return s>0?{m,tags,s}:null}).filter(Boolean).sort((a,b)=>b.s-a.s).slice(0,30);
-  box.append(h('h2',{},'À étudier à l’achat'));
-  box.append(buys.length?h('div',{class:'card'},buys.map(b=>cmRow(b.m,b.tags,h('b',{},eur(b.m.l!=null&&b.tags[0].startsWith('annonce')?b.m.l:b.m.e))))):h('div',{class:'empty'},'Rien pour le moment.'));
-  box.append(h('div',{class:'sub',style:'margin-top:12px'},'Pistes, pas des conseils : l’annonce la moins chère peut être une autre langue ou un autre état, et un momentum peut déjà être derrière. Vérifie sur Cardmarket. Frais de vente supposés : 5 %. Les prix Cardmarket mélangent toutes les langues.'));
+  box.append(sells.length?h('div',{class:'card'},sells.map(s=>cmRow(s.m,s.tags,cur(s.p),h('div',{},h('div',{class:'sm'},'×'+s.x.qty+' · coût moy. '+eur(s.avg)+(s.x.ver?'':' · version V.1 supposée')),ctLine(s.m.ct))))):h('div',{class:'empty'},'Aucun signal sur ton stock (renseigne le code des cartes, ex : OP05-119).'));
+  // --- achats dans le budget
+  const pool=sig.cm.rows.filter(m=>m.e>=bud.min&&m.e<=bud.max);
+  const arb=pool.map(m=>{
+    const ct=m.ct&&m.ct.EN?m.ct.EN[0]:null,buy=ct!=null?ct:m.l;
+    if(buy==null||buy>=m.e)return null;
+    const cost=buy+SHIP,margin=(m.e*(1-FEE)-cost)/cost*100;
+    return margin>=bud.mar?{m,buy,margin,verified:ct!=null}:null}).filter(Boolean)
+    .sort((a,b)=>(b.verified-a.verified)||(b.margin-a.margin)).slice(0,20);
+  box.append(h('h2',{},'Arbitrage Europe (achat → revente)'));
+  box.append(arb.length?h('div',{class:'card'},arb.map(a=>cmRow(a.m,[a.verified?'✅ prix CardTrader EN (NM)':'⚠️ annonce Cardmarket : langue/état à vérifier'],
+    h('div',{style:'text-align:right'},h('b',{class:'pos'},pc(a.margin)),h('div',{class:'sm'},'achat '+eur(a.buy)+' → '+eur(a.m.e))),ctLine(a.m.ct)))):h('div',{class:'empty'},'Aucune carte avec une marge nette ≥ '+bud.mar+' % dans ce budget.'));
+  const trends=pool.map(m=>{
+    const tags=[],src=['Cardmarket'];let s=0;
+    const mom=m.a7!=null&&m.a30>0?(m.a7/m.a30-1)*100:null;
+    if(mom!=null&&mom>=MOM_PCT){tags.push('momentum Europe '+pc(mom));s+=mom/2}
+    if(m.ud7!=null){
+      if(m.ud7>=MOM_UP){src.push('TCGplayer');
+        if(mom!=null&&mom>=MOM_PCT){tags.push('US aussi en hausse '+pc(m.ud7)+' : sources concordantes');s+=15}
+        else if(mom==null||mom<=5){tags.push('hausse US '+pc(m.ud7)+' pas encore en Europe');s+=m.ud7/2}}
+      if(mom!=null&&mom<=-MOM_PCT&&m.ud7>=0){src.push('TCGplayer');tags.push('baisse isolée en Europe (US stable)');s+=Math.abs(mom)/3}}
+    if(m.x!=null&&m.x<=-20){if(!src.includes('TCGplayer'))src.push('TCGplayer');tags.push('≈'+Math.abs(m.x).toFixed(0)+' % moins cher qu’aux US');s+=Math.abs(m.x)/2}
+    const n=m.ct&&m.ct.EN?m.ct.EN[1]:null;
+    if(m.ct){src.push('CardTrader');if(n!=null&&n<=3){tags.push('peu d’offres EN sur CardTrader ('+n+')');s+=5}}
+    return s>0?{m,tags,s,src}:null}).filter(Boolean).sort((a,b)=>b.s-a.s).slice(0,25);
+  box.append(h('h2',{},'Tendances à étudier'));
+  box.append(trends.length?h('div',{class:'card'},trends.map(t=>cmRow(t.m,t.tags.concat(['sources : '+t.src.join(' + ')]),h('b',{},eur(t.m.e)),ctLine(t.m.ct)))):h('div',{class:'empty'},'Rien de notable dans ce budget.'));
+  box.append(h('div',{class:'sub',style:'margin-top:12px'},'Pistes, pas des conseils. Marge = (tendance Cardmarket − 5 % de frais − prix d’achat − 1 € de port) / coût. La tendance Cardmarket mélange toutes les langues et tous les états : vérifie l’annonce avant d’acheter.'));
   return box;
 }
 const RANK=['common','uncommon','rare','leader','super rare','secret rare','special','treasure','manga','promo'];
@@ -225,7 +343,7 @@ function viewCat(box,own){
       const e=sets[x.g]||{},o=own(x.c),nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
       return h('div',{class:'row'},h('div',{},nm,
         h('div',{class:'sm'},[x.c,e.a||x.s,x.r,x.q&&x.q!=='Standard'?x.q:''].filter(Boolean).join(' · ')),
-        e.n?h('div',{class:'sm'},e.n+(e.d?' · sortie '+e.d:'')):'',
+        e.n?h('div',{class:'sm'},e.n+(e.d?' · sortie '+e.d:'')):'',ctLine(x.ct),
         o?h('div',{class:'sm'},'📦 en stock ×'+o.qty):''),
         h('div',{style:'text-align:right'},h('b',{},'$'+x.p.toFixed(2)),x.e!=null?h('div',{class:'sm'},'≈ '+eur(x.e)+' Cardmarket'):'',
           h('div',{class:'sm '+(x.d7>0?'pos':x.d7<0?'neg':'')},x.d7==null?'':(x.d7>0?'+':'')+x.d7+' %')))})):h('div',{class:'empty'},'Aucune carte.'));
