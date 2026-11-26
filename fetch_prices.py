@@ -71,6 +71,125 @@ def cardmarket():
     return str(guide.get("createdAt", ""))[:10], rows, per_code
 
 
+CT_API = "https://api.cardtrader.com/api/v2"
+LANGS = {"en": "EN", "jp": "JP", "ja": "JP", "fr": "FR", "de": "DE", "es": "ES", "it": "IT", "kr": "KR", "zh": "ZH"}
+
+
+def ct_get(path, token):
+    time.sleep(1.1)  # CardTrader limite le marché à 1 appel par seconde
+    r = requests.get(CT_API + path, headers={**HEADERS, "Authorization": f"Bearer {token}"}, timeout=180)
+    r.raise_for_status()
+    return r.json()
+
+
+def as_list(x):
+    return x.get("array", []) if isinstance(x, dict) else x
+
+
+def cardtrader(token):
+    """Prix plancher des annonces CardTrader (EUR) par langue, pour chaque carte One Piece.
+    Renvoie une liste de (ids_cardmarket, id_tcgplayer, {langue: [prix_NM, nb_exemplaires]})."""
+    games = as_list(ct_get("/games", token))
+    gid = next((g["id"] for g in games
+                if re.search(r"one\s*piece", f"{g.get('display_name', '')} {g.get('name', '')}", re.I)), None)
+    if gid is None:
+        raise RuntimeError("Jeu One Piece introuvable chez CardTrader")
+    links = []
+    for e in [x for x in as_list(ct_get("/expansions", token)) if x.get("game_id") == gid]:
+        bps = {b["id"]: b for b in as_list(ct_get(f"/blueprints/export?expansion_id={e['id']}", token))}
+        offers = ct_get(f"/marketplace/products?expansion_id={e['id']}", token)
+        if isinstance(offers, list):
+            grouped = {}
+            for o in offers:
+                grouped.setdefault(o.get("blueprint_id"), []).append(o)
+            offers = grouped
+        for bid, lst in offers.items():
+            floors = {}
+            for o in lst:
+                pr = o.get("price") or {}
+                if pr.get("currency") != "EUR":
+                    continue
+                props = o.get("properties_hash") or {}
+                lk = next((k for k in props if "language" in k), None)
+                raw = str(props.get(lk, "")).lower() if lk else ""
+                lang = LANGS.get(raw, raw.upper() or "?")
+                f = floors.setdefault(lang, [None, 0])
+                f[1] += int(o.get("quantity") or 1)
+                price = round(pr["cents"] / 100, 2)
+                if props.get("condition") in ("Mint", "Near Mint") and (f[0] is None or price < f[0]):
+                    f[0] = price
+            floors = {k: v for k, v in floors.items() if v[0] is not None}
+            bp = bps.get(int(bid)) if str(bid).isdigit() else None
+            if floors and bp:
+                links.append((bp.get("card_market_ids") or [], str(bp.get("tcg_player_id") or ""), floors))
+    return links
+
+
+def attach_ct(links, tcg_rows, cm_rows, fx=None):
+    """Relie CardTrader, TCGplayer et Cardmarket par leurs identifiants (variantes comprises)."""
+    tcg_by_id = {str(c["id"]): c for c in tcg_rows if "id" in c}
+    cm_by_id = {str(m["i"]): m for m in cm_rows}
+    for ids, tp, floors in links:
+        t = tcg_by_id.get(tp)
+        if t:
+            t["ct"] = floors
+        for i in ids:
+            m = cm_by_id.get(str(i))
+            if not m:
+                continue
+            m["ct"] = floors
+            if t:  # lien exact : prix US et variation 7 j de la même carte
+                m["us"], m["ud7"] = t["p"], t.get("d7")
+                t["mi"] = m["i"]
+                if fx:
+                    m["x"] = round((m["e"] / (t["p"] * fx) - 1) * 100, 1)
+
+
+HIST_FILE = "history.json"
+KEEP_DAYS = 120
+
+
+def update_history(today, cm_rows, fx):
+    """Ajoute les prix du jour à history.json : une série par carte (clé = id Cardmarket).
+    cm = tendance Cardmarket (EUR), ct = plancher CardTrader EN Near Mint (EUR), us = prix TCGplayer converti en EUR."""
+    h = {"dates": [], "cm": {}, "ct": {}, "us": {}}
+    if os.path.exists(HIST_FILE):
+        h = json.load(open(HIST_FILE))
+    day = str(today)
+    if day not in h["dates"]:
+        h["dates"].append(day)
+    idx, n = h["dates"].index(day), len(h["dates"])
+
+    def put(group, key, val):
+        arr = h[group].setdefault(key, [])
+        arr.extend([None] * (n - len(arr)))
+        arr[idx] = val
+
+    for m in cm_rows:
+        k = str(m["i"])
+        put("cm", k, m["e"])
+        ct = (m.get("ct") or {}).get("EN")
+        if ct:
+            put("ct", k, ct[0])
+        if fx and m.get("us") is not None:
+            put("us", k, round(m["us"] * fx, 2))
+    cut = max(0, n - KEEP_DAYS)
+    h["dates"] = h["dates"][cut:]
+    for g in ("cm", "ct", "us"):
+        for k in list(h[g]):
+            arr = h[g][k]
+            arr.extend([None] * (n - len(arr)))
+            arr = arr[cut:]
+            if all(v is None for v in arr):
+                del h[g][k]
+            else:
+                h[g][k] = arr
+    tmp = HIST_FILE + ".tmp"
+    json.dump(h, open(tmp, "w"), separators=(",", ":"))
+    os.replace(tmp, HIST_FILE)
+    return len(h["dates"]), len(h["cm"])
+
+
 def usd_to_eur():
     try:
         r = requests.get("https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR", timeout=30)
@@ -135,7 +254,7 @@ def main():
             cards[p["productId"]] = {
                 "c": ext["Number"], "n": p["name"],
                 "s": g.get("abbreviation") or g["name"],
-                "p": round(price, 2), "u": p["url"],
+                "p": round(price, 2), "u": p["url"], "id": p["productId"],
                 "r": ext.get("Rarity", ""), "t": kind(ext["Number"], g["name"]),
                 "g": gid, "q": variant(p["name"], ext["Number"]),
             }
@@ -158,19 +277,37 @@ def main():
         for c in rows:  # prix Cardmarket ajouté au catalogue si la carte est unique des deux côtés
             if len(tcg_codes.get(c["c"], ())) == 1 and c["c"] in by_code:
                 c["e"] = by_code[c["c"]]["e"]
-        if fx:  # écart EUR vs USD seulement si le code est unique des deux côtés
-            us = {}
-            for c in rows:
-                if len(tcg_codes.get(c["c"], ())) == 1:
-                    us[c["c"]] = c["p"]
-            for m in cm_rows:
-                if m["c"] in us and cm_codes.get(m["c"]) == 1:
-                    m["us"] = us[m["c"]]
-                    m["x"] = round((m["e"] / (us[m["c"]] * fx) - 1) * 100, 1)
+        us = {}  # repli : rapprochement par code quand il est unique des deux côtés
+        for c in rows:
+            if len(tcg_codes.get(c["c"], ())) == 1:
+                us[c["c"]] = c
+        for m in cm_rows:
+            if m["c"] in us and cm_codes.get(m["c"]) == 1:
+                t = us[m["c"]]
+                m["us"], m["ud7"] = t["p"], t.get("d7")
+                t["mi"] = m["i"]
+                if fx:
+                    m["x"] = round((m["e"] / (t["p"] * fx) - 1) * 100, 1)
         cm = {"updated": cm_date, "rows": cm_rows}
         print(f"Cardmarket : {len(cm_rows)} cartes")
     except Exception as e:  # on garde les données TCGplayer quoi qu'il arrive
         print(f"ATTENTION Cardmarket indisponible : {e}")
+    token = os.environ.get("CARDTRADER_TOKEN", "").strip()
+    if token:
+        try:
+            links = cardtrader(token)
+            attach_ct(links, rows, cm["rows"] if cm else [], fx)
+            print(f"CardTrader : {len(links)} cartes avec annonces")
+        except Exception as e:
+            print(f"ATTENTION CardTrader indisponible : {e}")
+    else:
+        print("CardTrader ignoré (aucun jeton CARDTRADER_TOKEN)")
+    if cm:
+        try:
+            days, cards_n = update_history(today, cm["rows"], fx)
+            print(f"Historique : {cards_n} cartes sur {days} jour(s)")
+        except Exception as e:
+            print(f"ATTENTION historique non mis à jour : {e}")
     json.dump({"updated": str(today), "source": "TCGCSV / TCGplayer", "fx": fx, "sets": sets, "rows": rows, "cm": cm},
               open("signals.json", "w"), separators=(",", ":"))
 
