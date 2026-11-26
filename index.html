@@ -36,6 +36,7 @@ nav button{flex:1;padding:12px 4px;border:0;background:none;color:var(--mu);font
 nav button b{display:block;font-size:20px;font-weight:400}
 nav button.on{color:var(--ac);font-weight:700}
 .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:var(--bg);border:1px solid var(--bd);margin:4px 4px 0 0}
+.ov{position:fixed;inset:0;z-index:50;background:var(--bg);overflow:auto;padding:calc(env(safe-area-inset-top,0px) + 12px) 14px calc(env(safe-area-inset-bottom,0px) + 24px)}
 .empty{color:var(--mu);text-align:center;padding:30px 10px}
 </style></head>
 <body>
@@ -243,7 +244,7 @@ function viewSig(){
   if(!r.length){box.append(h('div',{class:'empty'},sigF==='stock'?'Aucune carte de ton stock dans les signaux (le code doit correspondre, ex : OP05-119).':'Rien à signaler.'));return box}
   const pc=n=>(n>0?'+':'')+(n==null?'–':n.toFixed(1)+' %');
   box.append(h('div',{class:'card'},r.slice(0,50).map(x=>{const o=own(x.c);const nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
-    return h('div',{class:'row'},h('div',{},nm,h('div',{class:'sm'},[x.c,x.s,'$'+x.p.toFixed(2),'24 h '+pc(x.d1)].join(' · ')),o?h('div',{class:'sm'},'📦 en stock ×'+o.qty+' · coût moy. '+eur(o.cost/o.qty)):''),h('b',{class:x.d7>=0?'pos':'neg'},pc(x.d7)))})));
+    return h('div',{class:'row'},h('div',{},h('div',{},nm,x.mi?h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(x.mi,x.n)},'📈'):''),h('div',{class:'sm'},[x.c,x.s,'$'+x.p.toFixed(2),'24 h '+pc(x.d1)].join(' · ')),o?h('div',{class:'sm'},'📦 en stock ×'+o.qty+' · coût moy. '+eur(o.cost/o.qty)):''),h('b',{class:x.d7>=0?'pos':'neg'},pc(x.d7)))})));
   box.append(h('div',{class:'sub',style:'margin-top:12px'},'Signaux de tendance (marché US), pas des garanties. Vérifie le prix sur Cardmarket avant d’agir.'));
   return box;
 }
@@ -254,9 +255,49 @@ function cmFor(code,ver){
   const v=(ver||'').trim().toUpperCase();
   return l.find(x=>v?x.v.toUpperCase()===v:x.v==='V.1')||(v?null:l[0]);
 }
+let hist=null;
+async function loadHist(){if(hist)return hist;try{const r=await fetch('history.json',{cache:'no-cache'});if(!r.ok)throw 0;hist=await r.json()}catch(e){}return hist}
+const sv=(t,a,...c)=>{const e=document.createElementNS('http://www.w3.org/2000/svg',t);for(const k in a)e.setAttribute(k,a[k]);c.forEach(x=>e.append(x instanceof Node?x:document.createTextNode(x)));return e};
+async function openChart(mi,title){
+  const ov=h('div',{class:'ov'}),close=()=>ov.remove();
+  document.body.append(ov);
+  ov.append(h('div',{style:'display:flex;justify-content:space-between;gap:10px;align-items:center'},h('b',{},title),h('button',{class:'del',style:'font-size:22px',onclick:close},'✕')),h('div',{class:'empty'},'Chargement…'));
+  const H=await loadHist(),key=String(mi);
+  const SER=[['Cardmarket (tendance)','cm','var(--ac)'],['CardTrader EN (NM)','ct','var(--ok)'],['TCGplayer US (converti en €)','us','#4a7fd1']];
+  let period=30;
+  function draw(){
+    const body=h('div');
+    if(!H||!H.dates||H.dates.length<2){
+      body.append(h('div',{class:'empty'},!H?'Historique indisponible pour le moment.':'L’historique a démarré le '+((H.dates||[])[0]||'—')+'. Reviens dans quelques jours : une courbe demande au moins 2 relevés.'));
+    }else{
+      const n=H.dates.length,from=period?Math.max(0,n-period):0,dates=H.dates.slice(from);
+      const S=SER.map(([l,g,c])=>({l,c,v:((H[g]||{})[key]||[]).slice(from)})).filter(s=>s.v.some(x=>x!=null));
+      body.append(h('div',{class:'seg',style:'grid-template-columns:repeat(3,1fr);margin:12px 0'},[[30,'30 jours'],[90,'90 jours'],[0,'Tout']].map(([p,l])=>h('button',{type:'button',class:period===p?'on':'',onclick:()=>{period=p;draw()}},l))));
+      if(!S.length)body.append(h('div',{class:'empty'},'Pas encore de prix enregistrés pour cette carte.'));
+      else{
+        const all=S.flatMap(s=>s.v.filter(x=>x!=null)),mn=Math.min(...all),mx=Math.max(...all),W=340,Hh=190,pl=10,pr=10,pt=14,pb=24,N=dates.length;
+        const X=i=>pl+(N>1?i/(N-1):0)*(W-pl-pr),Y=v=>Hh-pb-(mx===mn?0.5:(v-mn)/(mx-mn))*(Hh-pt-pb);
+        const svg=sv('svg',{viewBox:'0 0 '+W+' '+Hh,style:'width:100%;height:auto;display:block'});
+        svg.append(sv('line',{x1:pl,x2:W-pr,y1:Y(mx),y2:Y(mx),style:'stroke:var(--bd)'}),sv('line',{x1:pl,x2:W-pr,y1:Y(mn),y2:Y(mn),style:'stroke:var(--bd)'}),
+          sv('text',{x:pl,y:Y(mx)-3,style:'fill:var(--mu);font-size:10px'},eur(mx)),sv('text',{x:pl,y:Y(mn)+11,style:'fill:var(--mu);font-size:10px'},eur(mn)),
+          sv('text',{x:pl,y:Hh-6,style:'fill:var(--mu);font-size:10px'},dates[0]),sv('text',{x:W-pr,y:Hh-6,'text-anchor':'end',style:'fill:var(--mu);font-size:10px'},dates[N-1]));
+        S.forEach(s=>{let d='',pen=false;s.v.forEach((v,i)=>{if(v==null){pen=false;return}d+=(pen?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)+' ';pen=true;});
+          svg.append(sv('path',{d,style:'fill:none;stroke-width:2;stroke-linejoin:round;stroke:'+s.c}));
+          s.v.forEach((v,i)=>{if(v!=null&&s.v.filter(x=>x!=null).length===1)svg.append(sv('circle',{cx:X(i),cy:Y(v),r:3,style:'fill:'+s.c}))})});
+        body.append(h('div',{class:'card'},svg));
+        body.append(h('div',{class:'card',style:'margin-top:10px'},S.map(s=>{const f=s.v.filter(x=>x!=null),a=f[0],z=f[f.length-1],ch=a?(z-a)/a*100:null;
+          return h('div',{class:'row'},h('div',{},h('b',{style:'color:'+s.c},'● '),s.l,h('div',{class:'sm'},'min '+eur(Math.min(...f))+' · max '+eur(Math.max(...f))+' · '+f.length+' relevé(s)')),
+            h('div',{style:'text-align:right'},h('b',{},eur(z)),ch!=null&&f.length>1?h('div',{class:'sm '+(ch>=0?'pos':'neg')},(ch>0?'+':'')+ch.toFixed(1)+' %'):''))})));
+      }
+      body.append(h('div',{class:'sub',style:'margin-top:12px'},n+' jour(s) d’historique. Les relevés commencent à la première mise à jour avec cette version.'));
+    }
+    ov.replaceChildren(ov.firstChild,body);
+  }
+  draw();
+}
 function cmRow(m,tags,right,extra){
   const nm=/^https:\/\//.test(m.u||'')?h('a',{href:m.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},m.n):h('b',{},m.n);
-  return h('div',{class:'row'},h('div',{},nm,h('div',{class:'sm'},[m.c,m.v,'tendance '+eur(m.e),m.l!=null?'min. '+eur(m.l):''].filter(Boolean).join(' · ')),extra||'',h('div',{},tags.map(t=>h('span',{class:'tag'},t)))),right);
+  return h('div',{class:'row'},h('div',{},h('div',{},nm,h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(m.i,m.n+(m.v?' '+m.v:''))},'📈')),h('div',{class:'sm'},[m.c,m.v,'tendance '+eur(m.e),m.l!=null?'min. '+eur(m.l):''].filter(Boolean).join(' · ')),extra||'',h('div',{},tags.map(t=>h('span',{class:'tag'},t)))),right);
 }
 const SHIP=1.0,MOM_UP=10;
 let bud=(()=>{const d={min:5,max:70,mar:10};try{return Object.assign(d,JSON.parse(localStorage.getItem('opp_bud')||'{}'))}catch(e){return d}})();
@@ -341,7 +382,7 @@ function viewCat(box,own){
     const kids=[h('div',{class:'sub',style:'margin-top:10px'},r.length+' cartes · prix US en $ (version anglaise)')];
     kids.push(r.length?h('div',{class:'card'},r.slice(0,cat.n).map(x=>{
       const e=sets[x.g]||{},o=own(x.c),nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
-      return h('div',{class:'row'},h('div',{},nm,
+      return h('div',{class:'row'},h('div',{},h('div',{},nm,x.mi?h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(x.mi,x.n)},'📈'):''),
         h('div',{class:'sm'},[x.c,e.a||x.s,x.r,x.q&&x.q!=='Standard'?x.q:''].filter(Boolean).join(' · ')),
         e.n?h('div',{class:'sm'},e.n+(e.d?' · sortie '+e.d:'')):'',ctLine(x.ct),
         o?h('div',{class:'sm'},'📦 en stock ×'+o.qty):''),
