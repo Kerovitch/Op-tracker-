@@ -22,9 +22,17 @@ jobs:
       - run: python fetch_prices.py
         env:
           CARDTRADER_TOKEN: ${{ secrets.CARDTRADER_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
       - run: |
           git config user.name "price-bot"
           git config user.email "bot@users.noreply.github.com"
           git add -A
           git commit -m "Prix $(date -u +%F)" || exit 0
+          git pull --rebase
           git push
+      - name: Alerte en cas d'échec
+        if: failure()
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          [ -n "$NTFY_TOPIC" ] && curl -s -H "Content-Type: application/json" -d "{\"topic\":\"$NTFY_TOPIC\",\"title\":\"⚠️ Mise à jour échouée\",\"message\":\"Prix quotidiens a échoué : ouvre l'onglet Actions sur GitHub.\",\"priority\":4}" https://ntfy.sh || true
