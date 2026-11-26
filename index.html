@@ -235,16 +235,17 @@ function viewSig(){
   const box=h('div');
   {const dd=Math.floor((Date.now()-Date.parse(sig.updated))/864e5);if(dd>=2)box.append(h('div',{class:'toast',style:'color:var(--bad)'},'⚠️ Données vieilles de '+dd+' jours : la mise à jour automatique ne tourne plus (voir l’onglet Actions sur GitHub).'))}
   box.append(h('div',{class:'sub'},'Mis à jour : '+sig.updated+' · '+sig.source+' · prix en $ · hausses/baisses : cartes ≥ 5 $'));
-  const F=[['opp','Opportunités'],['stock','Mon stock'],['up','Hausses US'],['down','Baisses US'],['cat','Catalogue']];
+  const F=[['opp','Opportunités'],['stock','Mon stock'],['up','Hausses US'],['down','Baisses US'],['cat','Catalogue'],['watch','🔔 Suivi'+(wlHit()?' ('+wlHit()+')':'')]];
   box.append(h('div',{class:'seg',style:'grid-template-columns:repeat(3,1fr);margin-bottom:10px'},F.map(([k,l])=>h('button',{type:'button',class:sigF===k?'on':'',onclick:()=>{sigF=k;render()}},l))));
   if(sigF==='cat')return viewCat(box,own);
   if(sigF==='opp')return viewOpp(box);
+  if(sigF==='watch')return viewWatch(box);
   let r=sig.rows;
   r=sigF==='stock'?r.filter(x=>own(x.c)):sigF==='up'?r.filter(x=>x.d7>0&&x.p>=5).sort((a,b)=>b.d7-a.d7):r.filter(x=>x.d7<0&&x.p>=5).sort((a,b)=>a.d7-b.d7);
   if(!r.length){box.append(h('div',{class:'empty'},sigF==='stock'?'Aucune carte de ton stock dans les signaux (le code doit correspondre, ex : OP05-119).':'Rien à signaler.'));return box}
   const pc=n=>(n>0?'+':'')+(n==null?'–':n.toFixed(1)+' %');
   box.append(h('div',{class:'card'},r.slice(0,50).map(x=>{const o=own(x.c);const nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
-    return h('div',{class:'row'},h('div',{},h('div',{},nm,x.mi?h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(x.mi,x.n)},'📈'):''),h('div',{class:'sm'},[x.c,x.s,'$'+x.p.toFixed(2),'24 h '+pc(x.d1)].join(' · ')),o?h('div',{class:'sm'},'📦 en stock ×'+o.qty+' · coût moy. '+eur(o.cost/o.qty)):''),h('b',{class:x.d7>=0?'pos':'neg'},pc(x.d7)))})));
+    return h('div',{class:'row'},h('div',{},h('div',{},nm,x.mi?rowBtns(x.mi,x.n):''),h('div',{class:'sm'},[x.c,x.s,'$'+x.p.toFixed(2),'24 h '+pc(x.d1)].join(' · ')),o?h('div',{class:'sm'},'📦 en stock ×'+o.qty+' · coût moy. '+eur(o.cost/o.qty)):''),h('b',{class:x.d7>=0?'pos':'neg'},pc(x.d7)))})));
   box.append(h('div',{class:'sub',style:'margin-top:12px'},'Signaux de tendance (marché US), pas des garanties. Vérifie le prix sur Cardmarket avant d’agir.'));
   return box;
 }
@@ -295,16 +296,70 @@ async function openChart(mi,title){
   }
   draw();
 }
+let wl=[],ghMsg='';
+try{wl=JSON.parse(localStorage.getItem('opp_wl')||'[]')}catch(e){}
+const ghRepo=()=>{try{const r=localStorage.getItem('gh_repo');if(r)return r}catch(e){}return location.hostname.endsWith('.github.io')?location.hostname.split('.')[0]+'/'+(location.pathname.split('/')[1]||''):''};
+const priceFor=(m,d)=>d==='above'?m.e:(m.ct&&m.ct.EN&&m.ct.EN[0]!=null?m.ct.EN[0]:m.e);
+const wlRow=w=>sig&&sig.cm&&sig.cm.rows?sig.cm.rows.find(x=>x.i===w.i):null;
+const wlOk=w=>{const m=wlRow(w);if(!m)return false;const p=priceFor(m,w.d);return w.d==='above'?p>=w.t:p<=w.t};
+const wlHit=()=>wl.filter(wlOk).length;
+const rowBtns=(mi,t)=>h('span',{},h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(mi,t)},'📈'),h('button',{class:'del',title:'Suivre un prix',onclick:()=>openWatch(mi)},wl.some(w=>w.i===mi)?'🔔':'🔕'));
+function ghSay(t,bad){ghMsg=t;const e=document.getElementById('ghMsg');if(e){e.textContent=t;e.style.color=bad?'var(--bad)':'var(--ok)'}}
+function saveWl(){try{localStorage.setItem('opp_wl',JSON.stringify(wl))}catch(e){}ghSync(true)}
+async function ghSync(quiet){
+  let tok='';try{tok=localStorage.getItem('gh_tok')||''}catch(e){}
+  const repo=ghRepo();
+  if(!tok||!repo){if(!quiet)ghSay('Renseigne le dépôt et le jeton GitHub.',1);return}
+  try{
+    const url='https://api.github.com/repos/'+repo+'/contents/watchlist.json',H={Authorization:'Bearer '+tok,Accept:'application/vnd.github+json'};
+    let sha;const g=await fetch(url,{headers:H});
+    if(g.ok)sha=(await g.json()).sha;else if(g.status!==404)throw new Error(String(g.status));
+    const txt=JSON.stringify({budget:bud,items:wl,updated:today()},null,1);
+    const r=await fetch(url,{method:'PUT',headers:{...H,'Content-Type':'application/json'},body:JSON.stringify({message:'Liste de suivi',content:btoa(unescape(encodeURIComponent(txt))),...(sha?{sha}:{})})});
+    if(!r.ok)throw new Error(String(r.status));
+    ghSay('✓ Liste envoyée à GitHub : les notifications utiliseront cette liste.');
+  }catch(e){ghSay(e.message==='401'||e.message==='403'?'Jeton refusé : il doit avoir le droit « Contents : Read and write » sur ce dépôt.':e.message==='404'?'Dépôt introuvable : vérifie « compte/nom ».':'Envoi à GitHub impossible ('+e.message+').',1)}
+}
+function openWatch(mi){
+  const m=sig&&sig.cm?sig.cm.rows.find(x=>x.i===mi):null;if(!m)return;
+  const ex=wl.find(w=>w.i===mi),ov=h('div',{class:'ov'}),close=()=>ov.remove();let dir=ex?ex.d:'below';
+  const t=h('input',{type:'number',min:'0',step:'0.01',inputmode:'decimal',value:ex?ex.t:Math.round(priceFor(m,'below')*90)/100});
+  const info=h('div',{class:'sub'}),seg=h('div',{class:'seg'});
+  const upd=()=>{seg.replaceChildren(...[['below','Acheter : prix ≤ cible'],['above','Vendre : prix ≥ cible']].map(([k,l])=>h('button',{type:'button',class:dir===k?'on':'',onclick:()=>{dir=k;upd()}},l)));
+    info.textContent='Prix actuel : '+eur(priceFor(m,dir))+(dir==='below'?' (plancher CardTrader EN, sinon tendance Cardmarket)':' (tendance Cardmarket)')};
+  upd();
+  ov.append(h('div',{style:'display:flex;justify-content:space-between;gap:10px;align-items:center'},h('b',{},m.n+(m.v?' '+m.v:'')),h('button',{class:'del',style:'font-size:22px',onclick:close},'✕')),
+    h('div',{class:'sub'},m.c||''),seg,info,h('label',{},'Prix cible (€)'),t,
+    h('button',{class:'btn',onclick:()=>{const v=parseFloat(t.value);if(!(v>0))return;wl=wl.filter(w=>w.i!==mi);wl.push({i:mi,n:m.n+(m.v?' '+m.v:''),c:m.c,t:v,d:dir});saveWl();close();render()}},'Enregistrer'));
+  if(ex)ov.append(h('button',{class:'btn',style:'background:var(--bd);color:var(--tx)',onclick:()=>{wl=wl.filter(w=>w.i!==mi);saveWl();close();render()}},'Retirer du suivi'));
+  document.body.append(ov);
+}
+function viewWatch(box){
+  if(!sig.cm||!sig.cm.rows){box.append(h('div',{class:'empty'},'Les prix Cardmarket ne sont pas encore dans le fichier.'));return box}
+  box.append(h('div',{class:'sub'},'Touche 🔕 à côté d’une carte pour la suivre (cartes à 3 € et plus).'));
+  box.append(wl.length?h('div',{class:'card'},wl.map(w=>{const m=wlRow(w),p=m?priceFor(m,w.d):null,ok=m&&wlOk(w),gap=p!=null?(p/w.t-1)*100:null;
+    return h('div',{class:'row'},h('div',{},h('b',{},w.n),h('div',{class:'sm'},(w.d==='above'?'Vendre ≥ ':'Acheter ≤ ')+eur(w.t)+(p!=null?' · actuel '+eur(p):' · carte introuvable'))),
+      h('div',{style:'text-align:right'},h('b',{class:ok?'pos':''},ok?'✅ atteint':gap!=null?(gap>0?'+':'')+gap.toFixed(0)+' % de la cible':''),
+        h('div',{},h('button',{class:'del',title:'Modifier',onclick:()=>openWatch(w.i)},'✏️'),m?h('button',{class:'del',title:'Historique',onclick:()=>openChart(w.i,w.n)},'📈'):'')))})):h('div',{class:'empty'},'Aucune carte suivie.'));
+  let tok='';try{tok=localStorage.getItem('gh_tok')||''}catch(e){}
+  box.append(h('h2',{},'Notifications sur ton téléphone'),h('div',{class:'card'},
+    h('div',{class:'sm'},'Pour être prévenu même app fermée : envoie ta liste à GitHub avec un jeton limité à ce dépôt (droit « Contents : Read and write »). Il reste sur cet appareil.'),
+    h('label',{},'Dépôt (compte/nom)'),h('input',{id:'ghRepo',value:ghRepo(),placeholder:'tonpseudo/op-tracker'}),
+    h('label',{},'Jeton GitHub'),h('input',{id:'ghTok',type:'password',autocomplete:'off',value:tok}),
+    h('button',{class:'btn',onclick:async()=>{try{localStorage.setItem('gh_repo',document.getElementById('ghRepo').value.trim());const v=document.getElementById('ghTok').value.trim();if(v)localStorage.setItem('gh_tok',v);else localStorage.removeItem('gh_tok')}catch(e){}ghSay('Envoi…');await ghSync(false)}},'Enregistrer et envoyer'),
+    h('div',{class:'toast',id:'ghMsg',style:'color:var(--ok)'},ghMsg)));
+  return box;
+}
 function cmRow(m,tags,right,extra){
   const nm=/^https:\/\//.test(m.u||'')?h('a',{href:m.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},m.n):h('b',{},m.n);
-  return h('div',{class:'row'},h('div',{},h('div',{},nm,h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(m.i,m.n+(m.v?' '+m.v:''))},'📈')),h('div',{class:'sm'},[m.c,m.v,'tendance '+eur(m.e),m.l!=null?'min. '+eur(m.l):''].filter(Boolean).join(' · ')),extra||'',h('div',{},tags.map(t=>h('span',{class:'tag'},t)))),right);
+  return h('div',{class:'row'},h('div',{},h('div',{},nm,rowBtns(m.i,m.n+(m.v?' '+m.v:''))),h('div',{class:'sm'},[m.c,m.v,'tendance '+eur(m.e),m.l!=null?'min. '+eur(m.l):''].filter(Boolean).join(' · ')),extra||'',h('div',{},tags.map(t=>h('span',{class:'tag'},t)))),right);
 }
 const SHIP=1.0,MOM_UP=10;
 let bud=(()=>{const d={min:5,max:70,mar:10};try{return Object.assign(d,JSON.parse(localStorage.getItem('opp_bud')||'{}'))}catch(e){return d}})();
 function viewOpp(box){
   if(!sig.cm||!sig.cm.rows||!sig.cm.rows.length){box.append(h('div',{class:'empty'},'Les prix Cardmarket ne sont pas encore dans le fichier. Mets à jour fetch_prices.py puis relance « Prix quotidiens ».'));return box}
   const c=compute(),pc=n=>(n>0?'+':'')+n.toFixed(0)+' %',cur=n=>h('b',{class:n>=0?'pos':'neg'},pc(n));
-  const setB=(k,v)=>{bud[k]=v;try{localStorage.setItem('opp_bud',JSON.stringify(bud))}catch(e){}render()};
+  const setB=(k,v)=>{bud[k]=v;try{localStorage.setItem('opp_bud',JSON.stringify(bud))}catch(e){}ghSync(true);render()};
   const num=(k,l)=>h('div',{},h('label',{},l),h('input',{type:'number',min:'0',value:bud[k],inputmode:'decimal',onchange:e=>setB(k,parseFloat(e.target.value)||0)}));
   box.append(h('div',{class:'sub'},'Cardmarket + CardTrader + TCGplayer · prix en € · fichier du '+sig.cm.updated));
   box.append(h('div',{class:'card'},h('div',{class:'two'},num('min','Budget min (€)'),num('max','Budget max (€)')),num('mar','Marge nette minimale (%)')));
@@ -382,7 +437,7 @@ function viewCat(box,own){
     const kids=[h('div',{class:'sub',style:'margin-top:10px'},r.length+' cartes · prix US en $ (version anglaise)')];
     kids.push(r.length?h('div',{class:'card'},r.slice(0,cat.n).map(x=>{
       const e=sets[x.g]||{},o=own(x.c),nm=/^https:\/\//.test(x.u||'')?h('a',{href:x.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},x.n):h('b',{},x.n);
-      return h('div',{class:'row'},h('div',{},h('div',{},nm,x.mi?h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(x.mi,x.n)},'📈'):''),
+      return h('div',{class:'row'},h('div',{},h('div',{},nm,x.mi?rowBtns(x.mi,x.n):''),
         h('div',{class:'sm'},[x.c,e.a||x.s,x.r,x.q&&x.q!=='Standard'?x.q:''].filter(Boolean).join(' · ')),
         e.n?h('div',{class:'sm'},e.n+(e.d?' · sortie '+e.d:'')):'',ctLine(x.ct),
         o?h('div',{class:'sm'},'📦 en stock ×'+o.qty):''),
@@ -403,6 +458,7 @@ function render(){
   try{items=JSON.parse(localStorage.getItem('opt')||'[]')}catch(e){}
   setStatus('Données stockées sur cet appareil');render();
   try{const r=await fetch('signals.json',{cache:'no-cache'});if(r.ok){sig=await r.json();setStatus('Données sur cet appareil · signaux du '+sig.updated);if(tab==='sig')render()}}catch(e){}
+  if(!wl.length){try{const r=await fetch('watchlist.json',{cache:'no-cache'});if(r.ok){const d=await r.json();if(Array.isArray(d.items)&&d.items.length){wl=d.items;if(d.budget)Object.assign(bud,d.budget);try{localStorage.setItem('opp_wl',JSON.stringify(wl))}catch(e){}render()}}}catch(e){}}
 })();
 </script>
 </body></html>
