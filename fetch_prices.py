@@ -190,6 +190,86 @@ def update_history(today, cm_rows, fx):
     return len(h["dates"]), len(h["cm"])
 
 
+STATE_FILE = "data/notified.json"
+SHIP, FEE = 1.0, 0.05
+
+
+def ntfy(topic, title, message, tags=None, click=None, priority=3):
+    body = {"topic": topic, "title": title, "message": message, "priority": priority}
+    if tags:
+        body["tags"] = tags
+    if click:
+        body["click"] = click
+    requests.post("https://ntfy.sh", json=body, timeout=30).raise_for_status()
+
+
+def app_url():
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if "/" not in repo:
+        return None
+    owner, name = repo.split("/", 1)
+    return f"https://{owner.lower()}.github.io/{name}/"
+
+
+def notify_all(topic, cm_rows, today, send=ntfy):
+    """Envoie : (1) les objectifs de prix atteints sur ta liste de suivi, (2) les nouvelles opportunités d'arbitrage vérifiées."""
+    cfg = {}
+    if os.path.exists("watchlist.json"):
+        try:
+            cfg = json.load(open("watchlist.json"))
+        except Exception:
+            cfg = {}
+    bud = {"min": 5, "max": 70, "mar": 10, **(cfg.get("budget") or {})}
+    st = {"arb": {}, "watch": {}}
+    if os.path.exists(STATE_FILE):
+        try:
+            st.update(json.load(open(STATE_FILE)))
+        except Exception:
+            pass
+    by_i = {m["i"]: m for m in cm_rows}
+    click, sent, reached = app_url(), 0, set()
+    for w in cfg.get("items", []):
+        m = by_i.get(w.get("i"))
+        if not m or not isinstance(w.get("t"), (int, float)):
+            continue
+        above = w.get("d") == "above"
+        ct = (m.get("ct") or {}).get("EN")
+        price = m["e"] if above else (ct[0] if ct else m["e"])
+        if (price >= w["t"]) if above else (price <= w["t"]):
+            key = f'{w["i"]}|{w.get("d")}|{w["t"]}'
+            reached.add(key)
+            if key not in st["watch"]:
+                send(topic, "🔔 Objectif atteint",
+                     f'{w.get("n", m["n"])} : {price:.2f} € ({"≥" if above else "≤"} cible {w["t"]} €)', ["bell"], click)
+                st["watch"][key] = str(today)
+                sent += 1
+    st["watch"] = {k: v for k, v in st["watch"].items() if k in reached}
+    cands = []
+    for m in cm_rows:
+        ct = (m.get("ct") or {}).get("EN")
+        if not ct or not (bud["min"] <= m["e"] <= bud["max"]) or ct[0] >= m["e"]:
+            continue
+        cost = ct[0] + SHIP
+        margin = (m["e"] * (1 - FEE) - cost) / cost * 100
+        if margin >= bud["mar"]:
+            cands.append((margin, m, ct[0]))
+    cands.sort(key=lambda c: -c[0])
+    fresh = [c for c in cands
+             if (today - datetime.date.fromisoformat(st["arb"].get(str(c[1]["i"]), "1970-01-01"))).days >= 7][:5]
+    if fresh:
+        lines = [f'{m["n"]} {m["v"]}'.strip() + f' : achat {buy:.2f} € → {m["e"]:.2f} € ({margin:+.0f} %)'
+                 for margin, m, buy in fresh]
+        send(topic, f"💡 {len(fresh)} opportunité(s) d’arbitrage", "\n".join(lines), ["moneybag"], click)
+        for _, m, _ in fresh:
+            st["arb"][str(m["i"])] = str(today)
+        sent += 1
+    cutoff = str(today - datetime.timedelta(days=30))
+    st["arb"] = {k: v for k, v in st["arb"].items() if v >= cutoff}
+    os.makedirs("data", exist_ok=True)
+    json.dump(st, open(STATE_FILE, "w"))
+    return sent
+
+
 def usd_to_eur():
     try:
         r = requests.get("https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR", timeout=30)
@@ -308,6 +388,12 @@ def main():
             print(f"Historique : {cards_n} cartes sur {days} jour(s)")
         except Exception as e:
             print(f"ATTENTION historique non mis à jour : {e}")
+    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    if cm and topic:
+        try:
+            print(f"Notifications envoyées : {notify_all(topic, cm['rows'], today)}")
+        except Exception as e:
+            print(f"ATTENTION notifications non envoyées : {e}")
     json.dump({"updated": str(today), "source": "TCGCSV / TCGplayer", "fx": fx, "sets": sets, "rows": rows, "cm": cm},
               open("signals.json", "w"), separators=(",", ":"))
 
