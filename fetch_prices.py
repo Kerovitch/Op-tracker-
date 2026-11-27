@@ -244,10 +244,11 @@ def notify_all(topic, cm_rows, today, send=ntfy):
                 st["watch"][key] = str(today)
                 sent += 1
     st["watch"] = {k: v for k, v in st["watch"].items() if k in reached}
+    hidden = set(cfg.get("hidden") or [])
     cands = []
     for m in cm_rows:
         ct = (m.get("ct") or {}).get("EN")
-        if not ct or not (bud["min"] <= m["e"] <= bud["max"]) or ct[0] >= m["e"]:
+        if m["i"] in hidden or not ct or not (bud["min"] <= m["e"] <= bud["max"]) or ct[0] >= m["e"]:
             continue
         cost = ct[0] + SHIP
         margin = (m["e"] * (1 - FEE) - cost) / cost * 100
