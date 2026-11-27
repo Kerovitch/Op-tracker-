@@ -296,14 +296,24 @@ async function openChart(mi,title){
   }
   draw();
 }
-let wl=[],ghMsg='';
+let wl=[],ghMsg='',seen={},hid={},initD='';
+try{seen=JSON.parse(localStorage.getItem('opp_seen')||'{}');hid=JSON.parse(localStorage.getItem('opp_hid')||'{}');initD=localStorage.getItem('opp_init')||''}catch(e){}
+const dayDiff=(a,b)=>Math.round((Date.parse(b)-Date.parse(a))/864e5);
+function saveHid(){try{localStorage.setItem('opp_hid',JSON.stringify(hid))}catch(e){}ghSync(true)}
+function trackSeen(ids){
+  const D=sig.updated;if(!initD){initD=D;try{localStorage.setItem('opp_init',D)}catch(e){}}
+  ids.forEach(i=>{const e=seen[i];if(!e||dayDiff(e.l,D)>3)seen[i]={f:D,l:D};else if(e.l!==D)e.l=D});
+  for(const k in seen)if(dayDiff(seen[k].l,D)>30)delete seen[k];
+  try{localStorage.setItem('opp_seen',JSON.stringify(seen))}catch(e){}
+}
+const ageTag=i=>{const e=seen[i];if(!e)return [];const d=dayDiff(e.f,sig.updated);return d<=0?(e.f>initD?['🆕 nouveau']:[]):['depuis '+(d+1)+' jours']};
 try{wl=JSON.parse(localStorage.getItem('opp_wl')||'[]')}catch(e){}
 const ghRepo=()=>{try{const r=localStorage.getItem('gh_repo');if(r)return r}catch(e){}return location.hostname.endsWith('.github.io')?location.hostname.split('.')[0]+'/'+(location.pathname.split('/')[1]||''):''};
 const priceFor=(m,d)=>d==='above'?m.e:(m.ct&&m.ct.EN&&m.ct.EN[0]!=null?m.ct.EN[0]:m.e);
 const wlRow=w=>sig&&sig.cm&&sig.cm.rows?sig.cm.rows.find(x=>x.i===w.i):null;
 const wlOk=w=>{const m=wlRow(w);if(!m)return false;const p=priceFor(m,w.d);return w.d==='above'?p>=w.t:p<=w.t};
 const wlHit=()=>wl.filter(wlOk).length;
-const rowBtns=(mi,t)=>h('span',{},h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(mi,t)},'📈'),h('button',{class:'del',title:'Suivre un prix',onclick:()=>openWatch(mi)},wl.some(w=>w.i===mi)?'🔔':'🔕'));
+const rowBtns=(mi,t,canHide)=>h('span',{},canHide?h('button',{class:'del',title:'Masquer cette carte',onclick:()=>{hid[mi]=sig.updated;saveHid();render()}},'🙈'):'',h('button',{class:'del',title:'Historique des prix',onclick:()=>openChart(mi,t)},'📈'),h('button',{class:'del',title:'Suivre un prix',onclick:()=>openWatch(mi)},wl.some(w=>w.i===mi)?'🔔':'🔕'));
 function ghSay(t,bad){ghMsg=t;const e=document.getElementById('ghMsg');if(e){e.textContent=t;e.style.color=bad?'var(--bad)':'var(--ok)'}}
 function saveWl(){try{localStorage.setItem('opp_wl',JSON.stringify(wl))}catch(e){}ghSync(true)}
 async function ghSync(quiet){
@@ -314,7 +324,7 @@ async function ghSync(quiet){
     const url='https://api.github.com/repos/'+repo+'/contents/watchlist.json',H={Authorization:'Bearer '+tok,Accept:'application/vnd.github+json'};
     let sha;const g=await fetch(url,{headers:H});
     if(g.ok)sha=(await g.json()).sha;else if(g.status!==404)throw new Error(String(g.status));
-    const txt=JSON.stringify({budget:bud,items:wl,updated:today()},null,1);
+    const txt=JSON.stringify({budget:bud,items:wl,hidden:Object.keys(hid).map(Number),updated:today()},null,1);
     const r=await fetch(url,{method:'PUT',headers:{...H,'Content-Type':'application/json'},body:JSON.stringify({message:'Liste de suivi',content:btoa(unescape(encodeURIComponent(txt))),...(sha?{sha}:{})})});
     if(!r.ok)throw new Error(String(r.status));
     ghSay('✓ Liste envoyée à GitHub : les notifications utiliseront cette liste.');
@@ -350,9 +360,9 @@ function viewWatch(box){
     h('div',{class:'toast',id:'ghMsg',style:'color:var(--ok)'},ghMsg)));
   return box;
 }
-function cmRow(m,tags,right,extra){
+function cmRow(m,tags,right,extra,canHide){
   const nm=/^https:\/\//.test(m.u||'')?h('a',{href:m.u,target:'_blank',rel:'noopener',style:'color:inherit;font-weight:700'},m.n):h('b',{},m.n);
-  return h('div',{class:'row'},h('div',{},h('div',{},nm,rowBtns(m.i,m.n+(m.v?' '+m.v:''))),h('div',{class:'sm'},[m.c,m.v,'tendance '+eur(m.e),m.l!=null?'min. '+eur(m.l):''].filter(Boolean).join(' · ')),extra||'',h('div',{},tags.map(t=>h('span',{class:'tag'},t)))),right);
+  return h('div',{class:'row'},h('div',{},h('div',{},nm,rowBtns(m.i,m.n+(m.v?' '+m.v:''),canHide)),h('div',{class:'sm'},[m.c,m.v,'tendance '+eur(m.e),m.l!=null?'min. '+eur(m.l):''].filter(Boolean).join(' · ')),extra||'',h('div',{},tags.map(t=>h('span',{class:'tag'},t)))),right);
 }
 const SHIP=1.0,MOM_UP=10;
 let bud=(()=>{const d={min:5,max:70,mar:10};try{return Object.assign(d,JSON.parse(localStorage.getItem('opp_bud')||'{}'))}catch(e){return d}})();
@@ -376,16 +386,17 @@ function viewOpp(box){
   box.append(h('h2',{},'À vendre ? (ton stock)'));
   box.append(sells.length?h('div',{class:'card'},sells.map(s=>cmRow(s.m,s.tags,cur(s.p),h('div',{},h('div',{class:'sm'},'×'+s.x.qty+' · coût moy. '+eur(s.avg)+(s.x.ver?'':' · version V.1 supposée')),ctLine(s.m.ct))))):h('div',{class:'empty'},'Aucun signal sur ton stock (renseigne le code des cartes, ex : OP05-119).'));
   // --- achats dans le budget
-  const pool=sig.cm.rows.filter(m=>m.e>=bud.min&&m.e<=bud.max);
+  const pool=sig.cm.rows.filter(m=>m.e>=bud.min&&m.e<=bud.max&&!hid[m.i]);
   const arb=pool.map(m=>{
     const ct=m.ct&&m.ct.EN?m.ct.EN[0]:null,buy=ct!=null?ct:m.l;
     if(buy==null||buy>=m.e)return null;
     const cost=buy+SHIP,margin=(m.e*(1-FEE)-cost)/cost*100;
     return margin>=bud.mar?{m,buy,margin,verified:ct!=null}:null}).filter(Boolean)
     .sort((a,b)=>(b.verified-a.verified)||(b.margin-a.margin)).slice(0,20);
+  trackSeen(arb.map(a=>a.m.i));
   box.append(h('h2',{},'Arbitrage Europe (achat → revente)'));
-  box.append(arb.length?h('div',{class:'card'},arb.map(a=>cmRow(a.m,[a.verified?'✅ prix CardTrader EN (NM)':'⚠️ annonce Cardmarket : langue/état à vérifier'],
-    h('div',{style:'text-align:right'},h('b',{class:'pos'},pc(a.margin)),h('div',{class:'sm'},'achat '+eur(a.buy)+' → '+eur(a.m.e))),ctLine(a.m.ct)))):h('div',{class:'empty'},'Aucune carte avec une marge nette ≥ '+bud.mar+' % dans ce budget.'));
+  box.append(arb.length?h('div',{class:'card'},arb.map(a=>cmRow(a.m,[a.verified?'✅ prix CardTrader EN (NM)':'⚠️ annonce Cardmarket : langue/état à vérifier'].concat(ageTag(a.m.i)),
+    h('div',{style:'text-align:right'},h('b',{class:'pos'},pc(a.margin)),h('div',{class:'sm'},'achat '+eur(a.buy)+' → '+eur(a.m.e))),ctLine(a.m.ct),true))):h('div',{class:'empty'},'Aucune carte avec une marge nette ≥ '+bud.mar+' % dans ce budget.'));
   const trends=pool.map(m=>{
     const tags=[],src=['Cardmarket'];let s=0;
     const mom=m.a7!=null&&m.a30>0?(m.a7/m.a30-1)*100:null;
@@ -399,8 +410,11 @@ function viewOpp(box){
     const n=m.ct&&m.ct.EN?m.ct.EN[1]:null;
     if(m.ct){src.push('CardTrader');if(n!=null&&n<=3){tags.push('peu d’offres EN sur CardTrader ('+n+')');s+=5}}
     return s>0?{m,tags,s,src}:null}).filter(Boolean).sort((a,b)=>b.s-a.s).slice(0,25);
+  trackSeen(trends.map(t=>t.m.i));
   box.append(h('h2',{},'Tendances à étudier'));
-  box.append(trends.length?h('div',{class:'card'},trends.map(t=>cmRow(t.m,t.tags.concat(['sources : '+t.src.join(' + ')]),h('b',{},eur(t.m.e)),ctLine(t.m.ct)))):h('div',{class:'empty'},'Rien de notable dans ce budget.'));
+  box.append(trends.length?h('div',{class:'card'},trends.map(t=>cmRow(t.m,ageTag(t.m.i).concat(t.tags,['sources : '+t.src.join(' + ')]),h('b',{},eur(t.m.e)),ctLine(t.m.ct),true))):h('div',{class:'empty'},'Rien de notable dans ce budget.'));
+  const nh=Object.keys(hid).length;
+  if(nh)box.append(h('div',{class:'sub',style:'margin-top:12px'},nh+' carte(s) masquée(s) · ',h('a',{href:'#',style:'color:var(--ac)',onclick:e=>{e.preventDefault();hid={};saveHid();render()}},'Tout réafficher')));
   box.append(h('div',{class:'sub',style:'margin-top:12px'},'Pistes, pas des conseils. Marge = (tendance Cardmarket − 5 % de frais − prix d’achat − 1 € de port) / coût. La tendance Cardmarket mélange toutes les langues et tous les états : vérifie l’annonce avant d’acheter.'));
   return box;
 }
